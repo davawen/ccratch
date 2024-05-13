@@ -169,16 +169,31 @@ fn parse_sequence(blocks: &HashMap<String, scratch::Block>, start: &scratch::Blo
     Sequence(sequence)
 }
 
+pub type VarMap = HashMap<String, String>;
+
 /// transforms scratch variable names into valid C identifiers
 /// ascii alphanumeric characters are passed through,
 /// other characters are transformed into underscores,
 /// conflicts are resolved by adding underscores at the end of the word
-fn sanitize_varnames(vars: HashMap<String, scratch::Variable>) -> HashMap<String, String> {
+///
+/// only local variables are returned
+/// `globals` is another hash map created to gather global variables
+fn sanitize_varnames(vars: HashMap<String, scratch::Variable>, globals: &mut VarMap) -> VarMap {
     let mut out = HashMap::new();
     let mut cidents = HashSet::new();
 
     for (id, var) in vars {
         let mut cident = var.0.replace(|x: char| !x.is_ascii_alphanumeric(), "_");
+
+        if var.2.is_some_and(|global| global) {
+            // FIXME: horibly inneficient, should do a global hash set
+            while globals.values().find(|g| g == &&cident).is_some() {
+                cident.push('_');
+            }
+            globals.insert(id, cident);
+            continue
+        }
+
         while cidents.contains(&cident) {
             cident.push('_');
         }
@@ -189,7 +204,7 @@ fn sanitize_varnames(vars: HashMap<String, scratch::Variable>) -> HashMap<String
     out
 }
 
-fn parse_target(target: scratch::Target) -> Target {
+fn parse_target(target: scratch::Target, globals: &mut VarMap) -> Target {
     let mut sequences = vec![];
 
     for (_, block) in &target.blocks {
@@ -201,12 +216,15 @@ fn parse_target(target: scratch::Target) -> Target {
     Target {
         name: target.name,
         code: sequences,
-        vars: sanitize_varnames(target.variables),
+        vars: sanitize_varnames(target.variables, globals),
         costumes: target.costumes,
         sounds: target.sounds,
     }
 }
 
-pub fn parse(targets: Vec<scratch::Target>) -> Vec<Target> {
-    targets.into_iter().map(parse_target).collect()
+pub fn parse(targets: Vec<scratch::Target>) -> (Vec<Target>, VarMap) {
+    let mut globals = VarMap::new();
+
+    let targets = targets.into_iter().map(|t| parse_target(t, &mut globals)).collect();
+    (targets, globals)
 }

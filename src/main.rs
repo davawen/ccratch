@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 
 use nanoid::nanoid;
-use parser::{Block, Value};
+use parser::{Block, Value, VarMap};
 
 mod parser;
 mod scratch;
@@ -16,10 +16,22 @@ fn generate_var_name() -> String {
     nanoid!(12, &CIDENT)
 }
 
+/// get a variable in a function
+fn get_var<'a>(target: &'a parser::Target, globals: &'a VarMap, id: &'_ str) -> String {
+    if let Some(var) = target.vars.get(id) {
+        format!("a->var_{var}")
+    } else if let Some(var) = globals.get(id) {
+        format!("g->var_{var}")
+    } else {
+        unreachable!("variable with ID `{id}` does not exists:\n{:#?}\n{globals:#?}", target.vars);
+    }
+}
+
 /// returns the variable name of the returned value
 fn compute_value(
     f: &mut impl Write,
     target: &parser::Target,
+    globals: &VarMap, 
     state: &mut u32,
     new_locals: &mut Vec<String>,
     value: &Value,
@@ -27,7 +39,7 @@ fn compute_value(
     let v = generate_var_name();
     match value {
         Value::Block(b) => {
-            let v = linearize_block(f, target, state, new_locals, &b)?;
+            let v = linearize_block(f, target, globals, state, new_locals, &b)?;
             return Ok(v.expect("expected block to write to a variable"));
         }
         Value::Number(n) => {
@@ -47,7 +59,7 @@ fn compute_value(
             todo!()
         }
         Value::Variable(var) => {
-            writeln!(f, "\t\tValue {} = a->var_{}; // {}", v, target.vars[&var.id], var.name)?;
+            writeln!(f, "\t\tValue {} = {}; // {}", v, get_var(target, globals, &var.id), var.name)?;
         }
         Value::List(l) => {
             todo!()
@@ -56,10 +68,24 @@ fn compute_value(
     Ok(v)
 }
 
+fn interpet_value_as_number(f: &mut impl Write, var: &str) -> io::Result<String> {
+    let n = generate_var_name();
+    writeln!(f, "\t\tfloat {n} = 0.0;")?;
+    writeln!(f, "\t\tif ({var}.type == VALUE_NUM) {n} = {var}.n;")?;
+    writeln!(f, "\t\telse if ({var}.type == VALUE_STRING) {{")?;
+    writeln!(f, "\t\t\tchar *end;")?;
+    writeln!(f, "\t\t\t{n} = strtof({var}.s, &end);")?;
+    writeln!(f, "\t\t\tif (*end != '\\0') {n} = 0.0;")?;
+    writeln!(f, "\t\t}}")?;
+
+    Ok(n)
+}
+
 /// returns the variable name of the returned value (if the block is an expression)
 fn linearize_block(
     f: &mut impl Write,
     target: &parser::Target,
+    globals: &VarMap, 
     state: &mut u32,
     new_locals: &mut Vec<String>,
     block: &Block,
@@ -70,16 +96,16 @@ fn linearize_block(
             return Ok(None);
         }
         Block::CreateCloneOf { actor } => {
-            let actor = compute_value(f, target, state, new_locals, actor);
+            let actor = compute_value(f, target, globals, state, new_locals, actor);
             writeln!(f, "\t\tprintf(\"TODO: create clone code\");")?;
             writeln!(f, "\t\texit(-1);")?;
         }
         Block::SetVariableTo { value, var } => {
-            let value = compute_value(f, target, state, new_locals, value)?;
+            let value = compute_value(f, target, globals, state, new_locals, value)?;
             writeln!(
                 f,
-                "\t\ta->var_{} = {}; // setting {}",
-                target.vars[&var.id], value, var.name
+                "\t\t{} = {}; // setting {}",
+                get_var(target, globals, &var.id), value, var.name
             )?;
         }
         Block::Repeat { times, branch } => {
@@ -87,22 +113,23 @@ fn linearize_block(
             let repeat_start = *state;
             let mut branch_code = Vec::new();
             // prepare branch to get end state number
-            linearize_sequence(&mut branch_code, target, state, new_locals, branch)?;
-            *state -= 1; // reverse previous add
+            linearize_sequence(&mut branch_code, target, globals, state, new_locals, branch)?;
 
             // initialize loop value (evaluate condition once)
-            let num = compute_value(f, target, state, new_locals, times)?;
+            let num = compute_value(f, target, globals, state, new_locals, times)?;
 
             // if initial condition is false, skip loop body
-            writeln!(
-                f,
-                "\t\tif ({num}.type != VALUE_NUM || (int){num}.n <= 0) s->state = {};",
-                *state + 1
-            )?;
+            let num = interpet_value_as_number(f, &num)?;
+            writeln!(f, "\t\tif ((int){num} <= 0) s->state = {};", *state + 1)?;
+            writeln!(f, "\t\telse {{")?;
 
+            writeln!(f, "\t\t\ts->state = {};", repeat_start)?;
             let loop_var = format!("loop_{}", generate_var_name());
-            writeln!(f, "\t\telse s->{loop_var} = {num}.n;")?;
+            writeln!(f, "\t\t\ts->{loop_var} = {num};")?;
 
+            writeln!(f, "\t\t}}")?;
+
+            *state -= 1; // reverse previous add
             // end loop start
             end_case(f, state)?;
 
@@ -110,11 +137,18 @@ fn linearize_block(
 
             // end loop (loop back condition)
             start_case(f, state)?;
+            writeln!(f, "\t\ts->{loop_var}--;")?;
             writeln!(f, "\t\tif (s->{loop_var} > 0) s->state = {};", repeat_start)?;
+            writeln!(f, "\t\telse s->state = {};", *state + 1)?;
             new_locals.push(loop_var);
+            return Ok(None);
         }
         Block::SayForSecs { message, secs } => {
-            writeln!(f, "\t\tprintf(\"HEY, THIS ISN'T IMPLEMENTED YET ;)\\n\");")?;
+            let message = compute_value(f, target, globals, state, new_locals, &message)?;
+
+            writeln!(f, "\t\tif ({message}.type == VALUE_NUM) printf(\"%f\\n\", {message}.n);")?;
+            writeln!(f, "\t\telse if ({message}.type == VALUE_STRING) printf(\"%s\\n\", {message}.s);")?;
+            writeln!(f, "\t\telse if ({message}.type == VALUE_COLOR) printf(\"#%02X%02X%02X\\n\", {message}.c.r, {message}.c.g, {message}.c.b);")?;
         }
         Block::CreateCloneOfMenu { actor } => {
             let v = generate_var_name();
@@ -125,13 +159,14 @@ fn linearize_block(
             return Ok(Some(v));
         }
         Block::Add { lhs, rhs } => {
-            let lhs = compute_value(f, target, state, new_locals, lhs)?;
-            let rhs = compute_value(f, target, state, new_locals, rhs)?;
-            writeln!(f, "\t\tif ({lhs}.type != VALUE_NUM || {rhs}.type != VALUE_NUM) {{")?;
-            writeln!(f, "\t\t\tprintf(\"WE DYING HERE\");")?;
-            writeln!(f, "\t\t\texit(-1);")?;
-            writeln!(f, "\t\t}}")?;
-            writeln!(f, "\t\t{lhs}.n += {rhs}.n;")?;
+            let lhs = compute_value(f, target, globals, state, new_locals, lhs)?;
+            let rhs = compute_value(f, target, globals, state, new_locals, rhs)?;
+
+            let lhsn = interpet_value_as_number(f, &lhs)?;
+            let rhsn = interpet_value_as_number(f, &rhs)?;
+
+            writeln!(f, "\t\t{lhs}.type = VALUE_NUM;")?;
+            writeln!(f, "\t\t{lhs}.n = {lhsn} + {rhsn};")?;
             return Ok(Some(lhs));
         }
     }
@@ -154,26 +189,27 @@ fn end_case(f: &mut impl Write, state: &mut u32) -> io::Result<()> {
 fn linearize_sequence(
     f: &mut impl Write,
     target: &parser::Target,
+    globals: &VarMap, 
     state: &mut u32,
     new_locals: &mut Vec<String>,
     sequence: &parser::Sequence,
 ) -> io::Result<()> {
     for block in &sequence.0 {
         start_case(f, state)?;
-        linearize_block(f, target, state, new_locals, block)?;
+        linearize_block(f, target, globals, state, new_locals, block)?;
         end_case(f, state)?;
     }
 
     Ok(())
 }
 
-fn linearize(f: &mut impl Write, target: &parser::Target, sequence: &parser::Sequence) -> io::Result<()> {
+fn linearize(f: &mut impl Write, target: &parser::Target, globals: &VarMap, sequence: &parser::Sequence) -> io::Result<()> {
     let sequence_name = generate_var_name();
 
     let mut code_output = Vec::new();
     let mut state = 0;
     let mut new_locals = Vec::new();
-    linearize_sequence(&mut code_output, target, &mut state, &mut new_locals, sequence)?;
+    linearize_sequence(&mut code_output, target, globals, &mut state, &mut new_locals, sequence)?;
 
     writeln!(f, "typedef struct {{")?;
     writeln!(f, "\tint state;")?;
@@ -197,7 +233,7 @@ fn linearize(f: &mut impl Write, target: &parser::Target, sequence: &parser::Seq
     Ok(())
 }
 
-fn generate(f: &mut impl Write, target: &parser::Target) -> io::Result<()> {
+fn generate(f: &mut impl Write, target: &parser::Target, globals: &VarMap) -> io::Result<()> {
     writeln!(f, "typedef struct {{")?;
     for (_, v) in &target.vars {
         writeln!(f, "\tValue var_{v};")?;
@@ -205,7 +241,7 @@ fn generate(f: &mut impl Write, target: &parser::Target) -> io::Result<()> {
     writeln!(f, "}} Actor{};", target.name)?;
     writeln!(f)?;
     for sequence in &target.code {
-        linearize(f, target, sequence)?;
+        linearize(f, target, globals, sequence)?;
     }
     writeln!(f)?;
 
@@ -217,7 +253,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let project: scratch::Project = serde_json::from_str(&data)?;
     let targets = project.targets;
-    let targets = parser::parse(targets);
+    let (targets, globals) = parser::parse(targets);
 
     //println!("{targets:#?}");
 
@@ -227,8 +263,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     writeln!(out, "#include \"runtime.h\"")?;
     writeln!(out)?;
 
+    writeln!(out, "typedef struct {{")?;
+    writeln!(out, "\tbool flag_clicked;")?;
+    for global in globals.values() {
+        writeln!(out, "\tValue var_{global};")?;
+    }
+    writeln!(out, "}} GlobalState;")?;
+
     for target in &targets {
-        generate(&mut out, target)?;
+        generate(&mut out, target, &globals)?;
     }
 
     Ok(())

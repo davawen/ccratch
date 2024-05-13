@@ -29,7 +29,3 @@ typedef struct {
         char *s;
     };
 } Value;
-
-typedef struct {
-    bool flag_clicked;
-} GlobalState;
