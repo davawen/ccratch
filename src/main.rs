@@ -68,17 +68,22 @@ fn compute_value(
     Ok(v)
 }
 
-fn interpet_value_as_number(f: &mut impl Write, var: &str) -> io::Result<String> {
-    let n = generate_var_name();
-    writeln!(f, "\t\tfloat {n} = 0.0;")?;
-    writeln!(f, "\t\tif ({var}.type == VALUE_NUM) {n} = {var}.n;")?;
-    writeln!(f, "\t\telse if ({var}.type == VALUE_STRING) {{")?;
-    writeln!(f, "\t\t\tchar *end;")?;
-    writeln!(f, "\t\t\t{n} = strtof({var}.s, &end);")?;
-    writeln!(f, "\t\t\tif (*end != '\\0') {n} = 0.0;")?;
-    writeln!(f, "\t\t}}")?;
+fn arithmetic_block(
+    f: &mut impl Write,
+    target: &parser::Target,
+    globals: &VarMap, 
+    state: &mut u32,
+    new_locals: &mut Vec<String>,
+    lhs: &Value,
+    rhs: &Value,
+    op: &str
+) -> io::Result<String> {
+    let lhs = compute_value(f, target, globals, state, new_locals, lhs)?;
+    let rhs = compute_value(f, target, globals, state, new_locals, rhs)?;
 
-    Ok(n)
+    writeln!(f, "\t\t{lhs}.n = value_as_number({lhs}) {op} value_as_number({rhs});")?;
+    writeln!(f, "\t\t{lhs}.type = VALUE_NUM;")?;
+    return Ok(lhs);
 }
 
 /// returns the variable name of the returned value (if the block is an expression)
@@ -117,15 +122,16 @@ fn linearize_block(
 
             // initialize loop value (evaluate condition once)
             let num = compute_value(f, target, globals, state, new_locals, times)?;
+            writeln!(f, "\t\t{num}.n = value_as_number({num});")?;
+            writeln!(f, "\t\t{num}.type = VALUE_NUM;")?;
 
             // if initial condition is false, skip loop body
-            let num = interpet_value_as_number(f, &num)?;
-            writeln!(f, "\t\tif ((int){num} <= 0) s->state = {};", *state + 1)?;
+            writeln!(f, "\t\tif ((int){num}.n <= 0) s->state = {};", *state + 1)?;
             writeln!(f, "\t\telse {{")?;
 
             writeln!(f, "\t\t\ts->state = {};", repeat_start)?;
             let loop_var = format!("loop_{}", generate_var_name());
-            writeln!(f, "\t\t\ts->{loop_var} = {num};")?;
+            writeln!(f, "\t\t\ts->{loop_var} = {num}.n;")?;
 
             writeln!(f, "\t\t}}")?;
 
@@ -158,17 +164,10 @@ fn linearize_block(
             )?;
             return Ok(Some(v));
         }
-        Block::Add { lhs, rhs } => {
-            let lhs = compute_value(f, target, globals, state, new_locals, lhs)?;
-            let rhs = compute_value(f, target, globals, state, new_locals, rhs)?;
-
-            let lhsn = interpet_value_as_number(f, &lhs)?;
-            let rhsn = interpet_value_as_number(f, &rhs)?;
-
-            writeln!(f, "\t\t{lhs}.type = VALUE_NUM;")?;
-            writeln!(f, "\t\t{lhs}.n = {lhsn} + {rhsn};")?;
-            return Ok(Some(lhs));
-        }
+        Block::Add { lhs, rhs } => return Ok(Some(arithmetic_block(f, target, globals, state, new_locals, lhs, rhs, "+")?)),
+        Block::Sub { lhs, rhs } => return Ok(Some(arithmetic_block(f, target, globals, state, new_locals, lhs, rhs, "-")?)),
+        Block::Mul { lhs, rhs } => return Ok(Some(arithmetic_block(f, target, globals, state, new_locals, lhs, rhs, "*")?)),
+        Block::Div { lhs, rhs } => return Ok(Some(arithmetic_block(f, target, globals, state, new_locals, lhs, rhs, "/")?)),
     }
     writeln!(f, "\t\ts->state = {};", *state + 1)?;
 
@@ -222,7 +221,7 @@ fn linearize(f: &mut impl Write, target: &parser::Target, globals: &VarMap, sequ
 
     writeln!(
         f,
-        "void sequence{}(Actor{} *a, Sequence{}State *s, const GlobalState *g) {{",
+        "void sequence{}(Actor{} *a, Sequence{}State *s, GlobalState *g) {{",
         sequence_name, target.name, sequence_name
     )?;
     writeln!(f, "\tswitch (s->state) {{")?;
@@ -255,11 +254,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let targets = project.targets;
     let (targets, globals) = parser::parse(targets);
 
-    //println!("{targets:#?}");
-
     let mut out = std::fs::File::create("output.c")?;
     writeln!(out, "#include <stdio.h>")?;
-    writeln!(out, "#include <stdlib.h>")?;
     writeln!(out, "#include \"runtime.h\"")?;
     writeln!(out)?;
 

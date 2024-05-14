@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <inttypes.h>
 #include <stdbool.h>
 
@@ -29,3 +30,13 @@ typedef struct {
         char *s;
     };
 } Value;
+
+static float value_as_number(Value v) {
+	if (v.type == VALUE_NUM) return v.n;
+	else if (v.type == VALUE_STRING) {
+		char *end;
+		float n = strtof(v.s, &end);
+		if (*end == '\0') return n;
+	}
+	return 0.0;
+}

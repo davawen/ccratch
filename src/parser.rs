@@ -41,6 +41,9 @@ pub enum Block {
     SetVariableTo { value: Value, var: Variable },
     Repeat { times: Value, branch: Sequence },
     Add { lhs: Value, rhs: Value },
+    Sub { lhs: Value, rhs: Value },
+    Mul { lhs: Value, rhs: Value },
+    Div { lhs: Value, rhs: Value },
     SayForSecs { message: Value, secs: Value },
 }
 
@@ -151,6 +154,21 @@ fn parse_block(blocks: &HashMap<String, scratch::Block>, block: &scratch::Block)
             let rhs = parse_value(blocks, &block.inputs["NUM2"]);
             Block::Add { lhs, rhs }
         }
+        "operator_subtract" => {
+            let lhs = parse_value(blocks, &block.inputs["NUM1"]);
+            let rhs = parse_value(blocks, &block.inputs["NUM2"]);
+            Block::Sub { lhs, rhs }
+        }
+        "operator_multiply" => {
+            let lhs = parse_value(blocks, &block.inputs["NUM1"]);
+            let rhs = parse_value(blocks, &block.inputs["NUM2"]);
+            Block::Mul { lhs, rhs }
+        }
+        "operator_divide" => {
+            let lhs = parse_value(blocks, &block.inputs["NUM1"]);
+            let rhs = parse_value(blocks, &block.inputs["NUM2"]);
+            Block::Div { lhs, rhs }
+        }
         opcode => todo!("unimplemented block: {opcode}"),
     }
 }
@@ -178,18 +196,20 @@ pub type VarMap = HashMap<String, String>;
 ///
 /// only local variables are returned
 /// `globals` is another hash map created to gather global variables
-fn sanitize_varnames(vars: HashMap<String, scratch::Variable>, globals: &mut VarMap) -> VarMap {
+/// 
+/// variables on stage targets are always global
+fn sanitize_varnames(is_stage: bool, vars: HashMap<String, scratch::Variable>, globals: &mut VarMap, global_hashset: &mut HashSet<String>) -> VarMap {
     let mut out = HashMap::new();
     let mut cidents = HashSet::new();
 
     for (id, var) in vars {
         let mut cident = var.0.replace(|x: char| !x.is_ascii_alphanumeric(), "_");
 
-        if var.2.is_some_and(|global| global) {
-            // FIXME: horibly inneficient, should do a global hash set
-            while globals.values().find(|g| g == &&cident).is_some() {
+        if is_stage || var.2.is_some_and(|global| global) {
+            while global_hashset.contains(&cident) {
                 cident.push('_');
             }
+            global_hashset.insert(cident.clone());
             globals.insert(id, cident);
             continue
         }
@@ -204,7 +224,7 @@ fn sanitize_varnames(vars: HashMap<String, scratch::Variable>, globals: &mut Var
     out
 }
 
-fn parse_target(target: scratch::Target, globals: &mut VarMap) -> Target {
+fn parse_target(target: scratch::Target, globals: &mut VarMap, global_hashset: &mut HashSet<String>) -> Target {
     let mut sequences = vec![];
 
     for (_, block) in &target.blocks {
@@ -216,7 +236,7 @@ fn parse_target(target: scratch::Target, globals: &mut VarMap) -> Target {
     Target {
         name: target.name,
         code: sequences,
-        vars: sanitize_varnames(target.variables, globals),
+        vars: sanitize_varnames(target.isStage, target.variables, globals, global_hashset),
         costumes: target.costumes,
         sounds: target.sounds,
     }
@@ -224,7 +244,8 @@ fn parse_target(target: scratch::Target, globals: &mut VarMap) -> Target {
 
 pub fn parse(targets: Vec<scratch::Target>) -> (Vec<Target>, VarMap) {
     let mut globals = VarMap::new();
+    let mut global_hashset = HashSet::new();
 
-    let targets = targets.into_iter().map(|t| parse_target(t, &mut globals)).collect();
+    let targets = targets.into_iter().map(|t| parse_target(t, &mut globals, &mut global_hashset)).collect();
     (targets, globals)
 }
