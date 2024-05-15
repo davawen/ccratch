@@ -53,3 +53,13 @@ static bool value_as_bool(Value v) {
 	}
 	return false;
 }
+
+static void convert_to_number(Value *v) {
+	v->n = value_as_number(*v);
+	v->type = VALUE_NUM;
+}
+
+static void convert_to_bool(Value *v) {
+	v->n = value_as_bool(*v);
+	v->type = VALUE_BOOL;
+}

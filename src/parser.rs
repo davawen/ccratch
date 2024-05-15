@@ -40,6 +40,7 @@ pub enum Block {
     CreateCloneOfMenu { actor: String },
     SetVariableTo { value: Value, var: Variable },
     Repeat { times: Value, branch: Sequence },
+    IfCondition { condition: Value, branch: Sequence },
     Add { lhs: Value, rhs: Value },
     Sub { lhs: Value, rhs: Value },
     Mul { lhs: Value, rhs: Value },
@@ -145,12 +146,13 @@ fn parse_block(blocks: &HashMap<String, scratch::Block>, block: &scratch::Block)
         }
         "control_repeat" => {
             let times = parse_value(blocks, &block.inputs["TIMES"]);
-            let branch = if let Some(id) = block.inputs["SUBSTACK"][1].as_str() {
-                parse_sequence(blocks, &blocks[id])
-            } else {
-                Sequence(vec![])
-            };
+            let branch = parse_sequence_from_id_or_empty(blocks, &block.inputs["SUBSTACK"]);
             Block::Repeat { times, branch }
+        }
+        "control_if" => {
+            let condition = parse_value(blocks, &block.inputs["CONDITION"]);
+            let branch = parse_sequence_from_id_or_empty(blocks, &block.inputs["SUBSTACK"]);
+            Block::IfCondition { condition, branch }
         }
         "control_create_clone_of" => {
             let actor = parse_value(blocks, &block.inputs["CLONE_OPTION"]);
@@ -179,6 +181,15 @@ fn parse_block(blocks: &HashMap<String, scratch::Block>, block: &scratch::Block)
             Block::Not { operand }
         }
         opcode => todo!("unimplemented block: {opcode}"),
+    }
+}
+
+/// parse a sequence if the given value has an ID, otherwise returns an empty sequence
+fn parse_sequence_from_id_or_empty(blocks: &HashMap<String, scratch::Block>, input: &[serde_json::Value]) -> Sequence {
+    if let Some(id) = input[1].as_str() {
+        parse_sequence(blocks, &blocks[id])
+    } else {
+        Sequence(vec![])
     }
 }
 

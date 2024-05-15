@@ -161,17 +161,16 @@ fn linearize_block(
 
             // initialize loop value (evaluate condition once)
             let num = compute_value(f, target, globals, state, new_locals, times)?;
-            writeln!(f, "\t\t{num}.n = value_as_number({num});")?;
-            writeln!(f, "\t\t{num}.type = VALUE_NUM;")?;
+            writeln!(f, "\t\tconvert_to_number(&{num})")?;
 
             // if initial condition is false, skip loop body
             writeln!(f, "\t\tif ((int){num}.n <= 0) s->state = {};", *state + 1)?;
-            writeln!(f, "\t\telse {{")?;
 
+            // otherwise, initialize loop variable and go to the next state (start of the sequence we linearized above)
+            writeln!(f, "\t\telse {{")?;
             writeln!(f, "\t\t\ts->state = {};", repeat_start)?;
             let loop_var = format!("loop_{}", generate_var_name());
             writeln!(f, "\t\t\ts->{loop_var} = {num}.n;")?;
-
             writeln!(f, "\t\t}}")?;
 
             *state -= 1; // reverse previous add
@@ -188,13 +187,35 @@ fn linearize_block(
             new_locals.push(loop_var);
             return Ok(None);
         }
+        Block::IfCondition { condition, branch } => {
+            *state += 1; // make the branch think we ended this case
+            let branch_start = *state;
+            let mut branch_code = Vec::new();
+            // prepare branch to get end state number
+            linearize_sequence(&mut branch_code, target, globals, state, new_locals, branch)?;
+
+            let condition = compute_value(f, target, globals, state, new_locals, condition)?;
+            writeln!(f, "\t\tconvert_to_bool(&{condition});")?;
+            writeln!(f, "\t\tif ({condition}.b) s->state = {branch_start};")?;
+            writeln!(f, "\t\telse s->state = {};", *state + 1)?;
+
+            *state -= 1; // reverse previous add
+            // end condition start
+            end_case(f, state)?;
+            f.write_all(&branch_code)?;
+
+            start_case(f, state)?; // start a new case to counter act the end case automatically added
+        }
         Block::SayForSecs { message, secs } => {
             let message = compute_value(f, target, globals, state, new_locals, &message)?;
 
             writeln!(f, "\t\tif ({message}.type == VALUE_NUM) printf(\"%f\\n\", {message}.n);")?;
             writeln!(f, "\t\telse if ({message}.type == VALUE_STRING) printf(\"%s\\n\", {message}.s);")?;
             writeln!(f, "\t\telse if ({message}.type == VALUE_COLOR) printf(\"#%02X%02X%02X\\n\", {message}.c.r, {message}.c.g, {message}.c.b);")?;
-            writeln!(f, "\t\telse if ({message}.type == VALUE_BOOL) printf(\"%s\\n\", \"true\" ? {message}.b : \"false\");")?;
+            writeln!(f, "\t\telse if ({message}.type == VALUE_BOOL) {{")?;
+            writeln!(f, "\t\t\tif ({message}.b) printf(\"true\\n\");")?;
+            writeln!(f, "\t\t\telse printf(\"false\\n\");")?;
+            writeln!(f, "\t\t}}")?;
         }
         Block::CreateCloneOfMenu { actor } => {
             let v = generate_var_name();
@@ -204,18 +225,19 @@ fn linearize_block(
             )?;
             return Ok(Some(v));
         }
-        Block::Add { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_num", "+", ValueType::Num)?)),
-        Block::Sub { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_num", "-", ValueType::Num)?)),
-        Block::Mul { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_num", "*", ValueType::Num)?)),
-        Block::Div { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_num", "/", ValueType::Num)?)),
-        Block::GreaterThan { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_num", ">", ValueType::Bool)?)),
-        Block::LesserThan { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_num", "<", ValueType::Bool)?)),
-        Block::Equals { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_num", "==", ValueType::Bool)?)),
+        Block::Add { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_number", "+", ValueType::Num)?)),
+        Block::Sub { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_number", "-", ValueType::Num)?)),
+        Block::Mul { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_number", "*", ValueType::Num)?)),
+        Block::Div { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_number", "/", ValueType::Num)?)),
+        Block::GreaterThan { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_number", ">", ValueType::Bool)?)),
+        Block::LesserThan { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_number", "<", ValueType::Bool)?)),
+        Block::Equals { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_number", "==", ValueType::Bool)?)),
         Block::And { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_bool", "&&", ValueType::Bool)?)),
         Block::Or { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_bool", "||", ValueType::Bool)?)),
         Block::Not { operand } => {
             let operand = compute_value(f, target, globals, state, new_locals, operand)?;
-            writeln!(f, "\t\t{operand}.b = !value_as_bool({operand})")?;
+            writeln!(f, "\t\tconvert_to_bool(&{operand});")?;
+            writeln!(f, "\t\t{operand}.b = !{operand}.b;")?;
             return Ok(Some(operand));
         }
     }
