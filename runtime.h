@@ -60,6 +60,6 @@ static void convert_to_number(Value *v) {
 }
 
 static void convert_to_bool(Value *v) {
-	v->n = value_as_bool(*v);
+	v->b = value_as_bool(*v);
 	v->type = VALUE_BOOL;
 }

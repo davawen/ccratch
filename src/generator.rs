@@ -289,14 +289,19 @@ fn linearize(f: &mut impl Write, target: &parser::Target, globals: &VarMap, sequ
     writeln!(f, "}} Sequence{sequence_name}State;")?;
     writeln!(f)?;
 
+    writeln!(f, "/// Returns wether the sequence has finished running.")?;
     writeln!(
         f,
-        "void sequence{}(Actor{} *a, Sequence{}State *s, GlobalState *g) {{",
+        "bool sequence{}(Actor{} *a, Sequence{}State *s, GlobalState *g) {{",
         sequence_name, target.name, sequence_name
     )?;
     writeln!(f, "\tswitch (s->state) {{")?;
     f.write_all(&code_output)?;
+    start_case(f, &mut state)?;
+    writeln!(f, "\t\treturn true;")?;
+    end_case(f, &mut state)?;
     writeln!(f, "\t}}")?;
+    writeln!(f, "\treturn false;")?;
     writeln!(f, "}}")?;
 
     Ok(())
