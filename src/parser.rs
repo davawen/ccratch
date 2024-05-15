@@ -44,6 +44,12 @@ pub enum Block {
     Sub { lhs: Value, rhs: Value },
     Mul { lhs: Value, rhs: Value },
     Div { lhs: Value, rhs: Value },
+    GreaterThan { lhs: Value, rhs: Value },
+    LesserThan { lhs: Value, rhs: Value },
+    Equals { lhs: Value, rhs: Value },
+    And { lhs: Value, rhs: Value },
+    Or { lhs: Value, rhs: Value },
+    Not { operand: Value },
     SayForSecs { message: Value, secs: Value },
 }
 
@@ -120,6 +126,16 @@ fn parse_value(blocks: &HashMap<String, scratch::Block>, v: &[serde_json::Value]
 }
 
 fn parse_block(blocks: &HashMap<String, scratch::Block>, block: &scratch::Block) -> Block {
+    macro_rules! binop {
+        ($outblock:ident, $inputname:literal) => {
+            {
+                let lhs = parse_value(blocks, &block.inputs[concat!($inputname, "1")]);
+                let rhs = parse_value(blocks, &block.inputs[concat!($inputname, "2")]);
+                Block::$outblock { lhs, rhs }
+            }
+        };
+    }
+
     match block.opcode.as_str() {
         "event_whenflagclicked" => Block::WhenFlagClicked,
         "looks_sayforsecs" => {
@@ -149,25 +165,18 @@ fn parse_block(blocks: &HashMap<String, scratch::Block>, block: &scratch::Block)
             let var = parse_field_variable(&block.fields["VARIABLE"]);
             Block::SetVariableTo { value, var }
         }
-        "operator_add" => {
-            let lhs = parse_value(blocks, &block.inputs["NUM1"]);
-            let rhs = parse_value(blocks, &block.inputs["NUM2"]);
-            Block::Add { lhs, rhs }
-        }
-        "operator_subtract" => {
-            let lhs = parse_value(blocks, &block.inputs["NUM1"]);
-            let rhs = parse_value(blocks, &block.inputs["NUM2"]);
-            Block::Sub { lhs, rhs }
-        }
-        "operator_multiply" => {
-            let lhs = parse_value(blocks, &block.inputs["NUM1"]);
-            let rhs = parse_value(blocks, &block.inputs["NUM2"]);
-            Block::Mul { lhs, rhs }
-        }
-        "operator_divide" => {
-            let lhs = parse_value(blocks, &block.inputs["NUM1"]);
-            let rhs = parse_value(blocks, &block.inputs["NUM2"]);
-            Block::Div { lhs, rhs }
+        "operator_add" => binop!(Add, "NUM"),
+        "operator_subtract" => binop!(Sub, "NUM"),
+        "operator_multiply" => binop!(Mul, "NUM"),
+        "operator_divide" => binop!(Div, "NUM"),
+        "operator_gt" => binop!(GreaterThan, "OPERAND"),
+        "operator_lt" => binop!(LesserThan, "OPERAND"),
+        "operator_equals" => binop!(Equals, "OPERAND"),
+        "operator_and" => binop!(And, "OPERAND"),
+        "operator_or" => binop!(Or, "OPERAND"),
+        "operator_not" => {
+            let operand = parse_value(blocks, &block.inputs["OPERAND"]);
+            Block::Not { operand }
         }
         opcode => todo!("unimplemented block: {opcode}"),
     }

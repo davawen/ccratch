@@ -6,6 +6,36 @@ use parser::{Block, Value, VarMap};
 mod parser;
 mod scratch;
 
+#[derive(Debug, Clone, Copy)]
+enum ValueType {
+    Num,
+    Color,
+    String,
+    Bool
+}
+
+impl ValueType {
+    /// The name of the enum value in the `ValueType` C enum
+    fn enum_name(&self) -> &'static str {
+        match self {
+            Self::Num => "VALUE_NUM",
+            Self::Color => "VALUE_COLOR",
+            Self::String => "VALUE_STRING",
+            Self::Bool => "VALUE_BOOL",
+        }
+    }
+
+    /// The name of the member associated to this type of value in the `Value` struct.
+    fn union_member(&self) -> char {
+        match self {
+            ValueType::Num => 'n',
+            ValueType::Color => 'c',
+            ValueType::String => 's',
+            ValueType::Bool => 'b',
+        }
+    }
+}
+
 fn generate_var_name() -> String {
     pub const CIDENT: [char; 53] = [
         '_', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u',
@@ -55,20 +85,25 @@ fn compute_value(
         Value::String(s) => {
             writeln!(f, "\t\tValue {v} = (Value){{ .type = VALUE_STRING, .s = \"{s}\" }};")?;
         }
-        Value::Broadcast(b) => {
+        Value::Broadcast(_b) => {
             todo!()
         }
         Value::Variable(var) => {
             writeln!(f, "\t\tValue {} = {}; // {}", v, get_var(target, globals, &var.id), var.name)?;
         }
-        Value::List(l) => {
+        Value::List(_l) => {
             todo!()
         }
     }
     Ok(v)
 }
 
-fn arithmetic_block(
+/// `mapping_func` is a function that will be applied to both operands.
+/// `op` is the operation that will be applied to the values.
+/// `out_type` is the output type of the operation.
+///
+/// Returns a variable, with type `Value` but whose type will always be `out_type`.
+fn binop_block(
     f: &mut impl Write,
     target: &parser::Target,
     globals: &VarMap, 
@@ -76,14 +111,18 @@ fn arithmetic_block(
     new_locals: &mut Vec<String>,
     lhs: &Value,
     rhs: &Value,
-    op: &str
+    mapping_func: &str,
+    op: &str,
+    out_type: ValueType
 ) -> io::Result<String> {
     let lhs = compute_value(f, target, globals, state, new_locals, lhs)?;
     let rhs = compute_value(f, target, globals, state, new_locals, rhs)?;
 
-    writeln!(f, "\t\t{lhs}.n = value_as_number({lhs}) {op} value_as_number({rhs});")?;
-    writeln!(f, "\t\t{lhs}.type = VALUE_NUM;")?;
-    return Ok(lhs);
+    let member = out_type.union_member();
+
+    writeln!(f, "\t\t{lhs}.{member} = {mapping_func}({lhs}) {op} {mapping_func}({rhs});")?;
+    writeln!(f, "\t\t{lhs}.type = {};", out_type.enum_name())?;
+    Ok(lhs)
 }
 
 /// returns the variable name of the returned value (if the block is an expression)
@@ -100,8 +139,8 @@ fn linearize_block(
             writeln!(f, "\t\tif (g->flag_clicked) s->state = {};", *state + 1)?;
             return Ok(None);
         }
-        Block::CreateCloneOf { actor } => {
-            let actor = compute_value(f, target, globals, state, new_locals, actor);
+        Block::CreateCloneOf { actor } => { // TODO: 
+            let _actor = compute_value(f, target, globals, state, new_locals, actor);
             writeln!(f, "\t\tprintf(\"TODO: create clone code\");")?;
             writeln!(f, "\t\texit(-1);")?;
         }
@@ -155,6 +194,7 @@ fn linearize_block(
             writeln!(f, "\t\tif ({message}.type == VALUE_NUM) printf(\"%f\\n\", {message}.n);")?;
             writeln!(f, "\t\telse if ({message}.type == VALUE_STRING) printf(\"%s\\n\", {message}.s);")?;
             writeln!(f, "\t\telse if ({message}.type == VALUE_COLOR) printf(\"#%02X%02X%02X\\n\", {message}.c.r, {message}.c.g, {message}.c.b);")?;
+            writeln!(f, "\t\telse if ({message}.type == VALUE_BOOL) printf(\"%s\\n\", \"true\" ? {message}.b : \"false\");")?;
         }
         Block::CreateCloneOfMenu { actor } => {
             let v = generate_var_name();
@@ -164,10 +204,20 @@ fn linearize_block(
             )?;
             return Ok(Some(v));
         }
-        Block::Add { lhs, rhs } => return Ok(Some(arithmetic_block(f, target, globals, state, new_locals, lhs, rhs, "+")?)),
-        Block::Sub { lhs, rhs } => return Ok(Some(arithmetic_block(f, target, globals, state, new_locals, lhs, rhs, "-")?)),
-        Block::Mul { lhs, rhs } => return Ok(Some(arithmetic_block(f, target, globals, state, new_locals, lhs, rhs, "*")?)),
-        Block::Div { lhs, rhs } => return Ok(Some(arithmetic_block(f, target, globals, state, new_locals, lhs, rhs, "/")?)),
+        Block::Add { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_num", "+", ValueType::Num)?)),
+        Block::Sub { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_num", "-", ValueType::Num)?)),
+        Block::Mul { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_num", "*", ValueType::Num)?)),
+        Block::Div { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_num", "/", ValueType::Num)?)),
+        Block::GreaterThan { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_num", ">", ValueType::Bool)?)),
+        Block::LesserThan { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_num", "<", ValueType::Bool)?)),
+        Block::Equals { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_num", "==", ValueType::Bool)?)),
+        Block::And { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_bool", "&&", ValueType::Bool)?)),
+        Block::Or { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_bool", "||", ValueType::Bool)?)),
+        Block::Not { operand } => {
+            let operand = compute_value(f, target, globals, state, new_locals, operand)?;
+            writeln!(f, "\t\t{operand}.b = !value_as_bool({operand})")?;
+            return Ok(Some(operand));
+        }
     }
     writeln!(f, "\t\ts->state = {};", *state + 1)?;
 
