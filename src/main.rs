@@ -47,29 +47,33 @@ fn generate_var_name() -> String {
 }
 
 /// get a variable in a function
-fn get_var<'a>(target: &'a parser::Target, globals: &'a VarMap, id: &'_ str) -> String {
-    if let Some(var) = target.vars.get(id) {
+fn get_var<'a>(args: &GeneratorArgs, id: &'_ str) -> String {
+    if let Some(var) = args.target.vars.get(id) {
         format!("a->var_{var}")
-    } else if let Some(var) = globals.get(id) {
+    } else if let Some(var) = args.globals.get(id) {
         format!("g->var_{var}")
     } else {
-        unreachable!("variable with ID `{id}` does not exists:\n{:#?}\n{globals:#?}", target.vars);
+        unreachable!("variable with ID `{id}` does not exists:\n{:#?}\n{:#?}", args.target.vars, args.globals);
     }
+}
+
+struct GeneratorArgs<'a> {
+    target: &'a parser::Target,
+    globals: &'a VarMap, 
+    state: &'a mut u32,
+    new_locals: &'a mut Vec<String>,
 }
 
 /// returns the variable name of the returned value
 fn compute_value(
     f: &mut impl Write,
-    target: &parser::Target,
-    globals: &VarMap, 
-    state: &mut u32,
-    new_locals: &mut Vec<String>,
+    args: &mut GeneratorArgs,
     value: &Value,
 ) -> io::Result<String> {
     let v = generate_var_name();
     match value {
         Value::Block(b) => {
-            let v = linearize_block(f, target, globals, state, new_locals, &b)?;
+            let v = linearize_block(f, args, &b)?;
             return Ok(v.expect("expected block to write to a variable"));
         }
         Value::Number(n) => {
@@ -89,7 +93,7 @@ fn compute_value(
             todo!()
         }
         Value::Variable(var) => {
-            writeln!(f, "\t\tValue {} = {}; // {}", v, get_var(target, globals, &var.id), var.name)?;
+            writeln!(f, "\t\tValue {} = {}; // {}", v, get_var(args, &var.id), var.name)?;
         }
         Value::List(_l) => {
             todo!()
@@ -105,18 +109,15 @@ fn compute_value(
 /// Returns a variable, with type `Value` but whose type will always be `out_type`.
 fn binop_block(
     f: &mut impl Write,
-    target: &parser::Target,
-    globals: &VarMap, 
-    state: &mut u32,
-    new_locals: &mut Vec<String>,
+    args: &mut GeneratorArgs,
     lhs: &Value,
     rhs: &Value,
     mapping_func: &str,
     op: &str,
     out_type: ValueType
 ) -> io::Result<String> {
-    let lhs = compute_value(f, target, globals, state, new_locals, lhs)?;
-    let rhs = compute_value(f, target, globals, state, new_locals, rhs)?;
+    let lhs = compute_value(f, args, lhs)?;
+    let rhs = compute_value(f, args, rhs)?;
 
     let member = out_type.union_member();
 
@@ -128,43 +129,40 @@ fn binop_block(
 /// returns the variable name of the returned value (if the block is an expression)
 fn linearize_block(
     f: &mut impl Write,
-    target: &parser::Target,
-    globals: &VarMap, 
-    state: &mut u32,
-    new_locals: &mut Vec<String>,
+    args: &mut GeneratorArgs,
     block: &Block,
 ) -> io::Result<Option<String>> {
     match block {
         Block::WhenFlagClicked => {
-            writeln!(f, "\t\tif (g->flag_clicked) s->state = {};", *state + 1)?;
+            writeln!(f, "\t\tif (g->flag_clicked) s->state = {};", *args.state + 1)?;
             return Ok(None);
         }
         Block::CreateCloneOf { actor } => { // TODO: 
-            let _actor = compute_value(f, target, globals, state, new_locals, actor);
+            let _actor = compute_value(f, args, actor);
             writeln!(f, "\t\tprintf(\"TODO: create clone code\");")?;
             writeln!(f, "\t\texit(-1);")?;
         }
         Block::SetVariableTo { value, var } => {
-            let value = compute_value(f, target, globals, state, new_locals, value)?;
+            let value = compute_value(f, args, value)?;
             writeln!(
                 f,
                 "\t\t{} = {}; // setting {}",
-                get_var(target, globals, &var.id), value, var.name
+                get_var(args, &var.id), value, var.name
             )?;
         }
         Block::Repeat { times, branch } => {
-            *state += 1; // make the branch think we ended this case
-            let repeat_start = *state;
+            *args.state += 1; // make the branch think we ended this case
+            let repeat_start = *args.state;
             let mut branch_code = Vec::new();
             // prepare branch to get end state number
-            linearize_sequence(&mut branch_code, target, globals, state, new_locals, branch)?;
+            linearize_sequence(&mut branch_code, args, branch)?;
 
             // initialize loop value (evaluate condition once)
-            let num = compute_value(f, target, globals, state, new_locals, times)?;
+            let num = compute_value(f, args, times)?;
             writeln!(f, "\t\tconvert_to_number(&{num})")?;
 
             // if initial condition is false, skip loop body
-            writeln!(f, "\t\tif ((int){num}.n <= 0) s->state = {};", *state + 1)?;
+            writeln!(f, "\t\tif ((int){num}.n <= 0) s->state = {};", *args.state + 1)?;
 
             // otherwise, initialize loop variable and go to the next state (start of the sequence we linearized above)
             writeln!(f, "\t\telse {{")?;
@@ -173,41 +171,41 @@ fn linearize_block(
             writeln!(f, "\t\t\ts->{loop_var} = {num}.n;")?;
             writeln!(f, "\t\t}}")?;
 
-            *state -= 1; // reverse previous add
+            *args.state -= 1; // reverse previous add
             // end loop start
-            end_case(f, state)?;
+            end_case(f, args.state)?;
 
             f.write_all(&branch_code)?;
 
             // end loop (loop back condition)
-            start_case(f, state)?;
+            start_case(f, args.state)?;
             writeln!(f, "\t\ts->{loop_var}--;")?;
             writeln!(f, "\t\tif (s->{loop_var} > 0) s->state = {};", repeat_start)?;
-            writeln!(f, "\t\telse s->state = {};", *state + 1)?;
-            new_locals.push(loop_var);
+            writeln!(f, "\t\telse s->state = {};", *args.state + 1)?;
+            args.new_locals.push(loop_var);
             return Ok(None);
         }
         Block::IfCondition { condition, branch } => {
-            *state += 1; // make the branch think we ended this case
-            let branch_start = *state;
+            *args.state += 1; // make the branch think we ended this case
+            let branch_start = *args.state;
             let mut branch_code = Vec::new();
             // prepare branch to get end state number
-            linearize_sequence(&mut branch_code, target, globals, state, new_locals, branch)?;
+            linearize_sequence(&mut branch_code, args, branch)?;
 
-            let condition = compute_value(f, target, globals, state, new_locals, condition)?;
+            let condition = compute_value(f, args, condition)?;
             writeln!(f, "\t\tconvert_to_bool(&{condition});")?;
             writeln!(f, "\t\tif ({condition}.b) s->state = {branch_start};")?;
-            writeln!(f, "\t\telse s->state = {};", *state + 1)?;
+            writeln!(f, "\t\telse s->state = {};", *args.state + 1)?;
 
-            *state -= 1; // reverse previous add
+            *args.state -= 1; // reverse previous add
             // end condition start
-            end_case(f, state)?;
+            end_case(f, args.state)?;
             f.write_all(&branch_code)?;
 
-            start_case(f, state)?; // start a new case to counter act the end case automatically added
+            start_case(f, args.state)?; // start a new case to counter act the end case automatically added
         }
         Block::SayForSecs { message, secs } => {
-            let message = compute_value(f, target, globals, state, new_locals, &message)?;
+            let message = compute_value(f, args, &message)?;
 
             writeln!(f, "\t\tif ({message}.type == VALUE_NUM) printf(\"%f\\n\", {message}.n);")?;
             writeln!(f, "\t\telse if ({message}.type == VALUE_STRING) printf(\"%s\\n\", {message}.s);")?;
@@ -225,23 +223,23 @@ fn linearize_block(
             )?;
             return Ok(Some(v));
         }
-        Block::Add { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_number", "+", ValueType::Num)?)),
-        Block::Sub { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_number", "-", ValueType::Num)?)),
-        Block::Mul { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_number", "*", ValueType::Num)?)),
-        Block::Div { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_number", "/", ValueType::Num)?)),
-        Block::GreaterThan { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_number", ">", ValueType::Bool)?)),
-        Block::LesserThan { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_number", "<", ValueType::Bool)?)),
-        Block::Equals { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_number", "==", ValueType::Bool)?)),
-        Block::And { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_bool", "&&", ValueType::Bool)?)),
-        Block::Or { lhs, rhs } => return Ok(Some(binop_block(f, target, globals, state, new_locals, lhs, rhs, "value_as_bool", "||", ValueType::Bool)?)),
+        Block::Add { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_as_number", "+", ValueType::Num)?)),
+        Block::Sub { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_as_number", "-", ValueType::Num)?)),
+        Block::Mul { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_as_number", "*", ValueType::Num)?)),
+        Block::Div { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_as_number", "/", ValueType::Num)?)),
+        Block::GreaterThan { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_as_number", ">", ValueType::Bool)?)),
+        Block::LesserThan { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_as_number", "<", ValueType::Bool)?)),
+        Block::Equals { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_as_number", "==", ValueType::Bool)?)),
+        Block::And { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_as_bool", "&&", ValueType::Bool)?)),
+        Block::Or { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_as_bool", "||", ValueType::Bool)?)),
         Block::Not { operand } => {
-            let operand = compute_value(f, target, globals, state, new_locals, operand)?;
+            let operand = compute_value(f, args, operand)?;
             writeln!(f, "\t\tconvert_to_bool(&{operand});")?;
             writeln!(f, "\t\t{operand}.b = !{operand}.b;")?;
             return Ok(Some(operand));
         }
     }
-    writeln!(f, "\t\ts->state = {};", *state + 1)?;
+    writeln!(f, "\t\ts->state = {};", *args.state + 1)?;
 
     Ok(None)
 }
@@ -259,16 +257,13 @@ fn end_case(f: &mut impl Write, state: &mut u32) -> io::Result<()> {
 
 fn linearize_sequence(
     f: &mut impl Write,
-    target: &parser::Target,
-    globals: &VarMap, 
-    state: &mut u32,
-    new_locals: &mut Vec<String>,
+    args: &mut GeneratorArgs,
     sequence: &parser::Sequence,
 ) -> io::Result<()> {
     for block in &sequence.0 {
-        start_case(f, state)?;
-        linearize_block(f, target, globals, state, new_locals, block)?;
-        end_case(f, state)?;
+        start_case(f, args.state)?;
+        linearize_block(f, args, block)?;
+        end_case(f, args.state)?;
     }
 
     Ok(())
@@ -280,7 +275,13 @@ fn linearize(f: &mut impl Write, target: &parser::Target, globals: &VarMap, sequ
     let mut code_output = Vec::new();
     let mut state = 0;
     let mut new_locals = Vec::new();
-    linearize_sequence(&mut code_output, target, globals, &mut state, &mut new_locals, sequence)?;
+    let mut args = GeneratorArgs {
+        state: &mut state,
+        new_locals: &mut new_locals,
+        globals,
+        target
+    };
+    linearize_sequence(&mut code_output, &mut args, sequence)?;
 
     writeln!(f, "typedef struct {{")?;
     writeln!(f, "\tint state;")?;
