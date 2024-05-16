@@ -60,7 +60,7 @@ pub struct Sequence(pub Vec<Block>);
 #[derive(Debug)]
 pub struct Target {
     pub name: String,
-    pub code: Vec<Sequence>,
+    pub sequences: Vec<Sequence>,
     /// Map from variable ID to C variable name
     pub vars: HashMap<String, String>,
     pub costumes: Vec<scratch::Costume>,
@@ -255,7 +255,7 @@ fn parse_target(target: scratch::Target, globals: &mut VarMap, global_hashset: &
 
     Target {
         name: target.name,
-        code: sequences,
+        sequences,
         vars: sanitize_varnames(target.isStage, target.variables, globals, global_hashset),
         costumes: target.costumes,
         sounds: target.sounds,

@@ -3,13 +3,16 @@
 #include <stdbool.h>
 #include <string.h>
 
-struct ActorState {
+#include <raylib.h>
+
+typedef struct {
     int x;
     int y;
     int size;
-    int direction;
+    int angle;
     int sprite_index;
-};
+	Texture *sprites;
+} ActorState;
 
 enum ValueType {
     VALUE_NUM,
