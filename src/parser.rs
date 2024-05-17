@@ -58,12 +58,21 @@ pub enum Block {
 pub struct Sequence(pub Vec<Block>);
 
 #[derive(Debug)]
+pub struct Costume {
+    pub name: String,
+    pub filename: String,
+    pub bitmap_resolution: i32,
+    pub rotation_center_x: i32,
+    pub rotation_center_y: i32,
+}
+
+#[derive(Debug)]
 pub struct Target {
     pub name: String,
     pub sequences: Vec<Sequence>,
     /// Map from variable ID to C variable name
     pub vars: HashMap<String, String>,
-    pub costumes: Vec<scratch::Costume>,
+    pub costumes: Vec<Costume>,
     pub sounds: Vec<scratch::Sound>,
 }
 
@@ -244,7 +253,7 @@ fn sanitize_varnames(is_stage: bool, vars: HashMap<String, scratch::Variable>, g
     out
 }
 
-fn parse_target(target: scratch::Target, globals: &mut VarMap, global_hashset: &mut HashSet<String>) -> Target {
+fn parse_target(mut target: scratch::Target, globals: &mut VarMap, global_hashset: &mut HashSet<String>) -> Target {
     let mut sequences = vec![];
 
     for (_, block) in &target.blocks {
@@ -253,11 +262,30 @@ fn parse_target(target: scratch::Target, globals: &mut VarMap, global_hashset: &
         }
     }
 
+    let files: Vec<_> = std::fs::read_dir("project").unwrap().collect::<Result<_, _>>().unwrap();
+    for costume in &mut target.costumes {
+        if costume.md5ext.is_none() {
+            let file = files.iter().find(|f| f.file_name().to_str().unwrap().starts_with(&costume.assetId)).expect("expected asset to be linked to a valid file");
+            costume.md5ext = Some(file.file_name().to_str().unwrap().to_owned());
+        }
+    }
+
+    let costumes = target.costumes.into_iter().map(|costume| {
+        let filename = costume.md5ext.unwrap_or_else(|| format!("{}.{}", costume.assetId, costume.dataFormat));
+        Costume {
+            name: costume.name,
+            filename,
+            bitmap_resolution: costume.bitmapResolution,
+            rotation_center_x: costume.rotationCenterX,
+            rotation_center_y: costume.rotationCenterY
+        }
+    }).collect();
+
     Target {
         name: target.name,
         sequences,
         vars: sanitize_varnames(target.isStage, target.variables, globals, global_hashset),
-        costumes: target.costumes,
+        costumes,
         sounds: target.sounds,
     }
 }

@@ -25,7 +25,9 @@ pub struct Costume {
     pub assetId: String,
     pub name: String,
     /// The name of the asset file
-    pub md5ext: String,
+    /// If not present, use `assetId` with `dataFormat`
+    #[serde(default)]
+    pub md5ext: Option<String>,
     pub dataFormat: String,
     #[serde(default)]
     pub bitmapResolution: i32,
@@ -46,7 +48,7 @@ pub struct Sound {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Variable(pub String, pub f32, #[serde(default)] pub Option<bool>);
+pub struct Variable(pub String, pub Value, #[serde(default)] pub Option<bool>);
 
 #[derive(Debug, Deserialize)]
 pub struct List(String, Vec<i32>);

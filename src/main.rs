@@ -10,7 +10,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let targets = project.targets;
     let (targets, globals) = parser::parse(targets);
 
-    let mut out = std::fs::File::create("output.c")?;
-    generator::generate(&mut out, &targets, &globals)?;
+    let mut header = std::fs::File::create("output.h")?;
+    let mut source = std::fs::File::create("output.c")?;
+    generator::generate(&mut header, &mut source, &targets, &globals)?;
     Ok(())
 }

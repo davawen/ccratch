@@ -6,12 +6,18 @@
 #include <raylib.h>
 
 typedef struct {
+    int rotation_center_x;
+    int rotation_center_y;
+    Texture texture;
+} Sprite;
+
+typedef struct {
     int x;
     int y;
     int size;
     int angle;
     int sprite_index;
-	Texture *sprites;
+	Sprite *sprites;
 } ActorState;
 
 enum ValueType {

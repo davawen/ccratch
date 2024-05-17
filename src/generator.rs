@@ -354,8 +354,8 @@ fn linearize_sequence(f: &mut impl Write, args: &mut GeneratorArgs, sequence: &p
 }
 
 fn linearize(
-    struct_writer: &mut impl Write,
-    func_writer: &mut impl Write,
+    headerf: &mut impl Write,
+    sourcef: &mut impl Write,
     target: &parser::Target,
     globals: &VarMap,
     sequence_index: usize,
@@ -368,71 +368,92 @@ fn linearize(
         globals,
         target,
     };
-    writeln!(func_writer, "/// Returns wether the sequence has finished running.")?;
+    writeln!(sourcef, "/// Returns wether the sequence has finished running.")?;
     writeln!(
-        func_writer,
-        "bool sequence{}_{}(Actor{} *a, Sequence{}State *s, GlobalState *g) {{",
-        sequence_index, target.name, target.name, sequence_index
+        sourcef,
+        "bool run_{}_sequence{sequence_index}(Actor{} *a, {}Sequence{sequence_index}State *s, GlobalState *g) {{",
+        target.name, target.name, target.name
     )?;
-    writeln!(func_writer, "\tswitch (s->state) {{")?;
-    linearize_sequence(func_writer, &mut args, &target.sequences[sequence_index])?;
-    start_case(func_writer, &mut state)?;
-    writeln!(func_writer, "\t\treturn true;")?;
-    end_case(func_writer, &mut state)?;
-    writeln!(func_writer, "\t}}")?;
-    writeln!(func_writer, "\treturn false;")?;
-    writeln!(func_writer, "}}")?;
+    writeln!(sourcef, "\tswitch (s->state) {{")?;
+    linearize_sequence(sourcef, &mut args, &target.sequences[sequence_index])?;
+    start_case(sourcef, &mut state)?;
+    writeln!(sourcef, "\t\treturn true;")?;
+    end_case(sourcef, &mut state)?;
+    writeln!(sourcef, "\t}}")?;
+    writeln!(sourcef, "\treturn false;")?;
+    writeln!(sourcef, "}}")?;
 
-    writeln!(struct_writer, "typedef struct Sequence{sequence_index}State {{")?;
-    writeln!(struct_writer, "\tint state;")?;
-    writeln!(struct_writer, "\tfloat time;")?;
+    writeln!(headerf, "typedef struct {{")?;
+    writeln!(headerf, "\tint state;")?;
+    writeln!(headerf, "\tfloat time;")?;
     for local in new_locals {
-        writeln!(struct_writer, "\tint {local};")?;
+        writeln!(headerf, "\tint {local};")?;
     }
-    writeln!(struct_writer, "}} Sequence{sequence_index}State;")?;
-    writeln!(struct_writer)?;
+    writeln!(headerf, "}} {}Sequence{sequence_index}State;", target.name)?;
+    writeln!(headerf)?;
 
     Ok(())
 }
 
-fn generate_target(f: &mut impl Write, target: &parser::Target, globals: &VarMap) -> io::Result<()> {
-    let mut func_writer = Vec::new();
-
+fn generate_target(headerf: &mut impl Write, sourcef: &mut impl Write, target: &parser::Target, globals: &VarMap) -> io::Result<()> {
     for i in 0..target.sequences.len() {
-        linearize(f, &mut func_writer, target, globals, i)?;
+        linearize(headerf, sourcef, target, globals, i)?;
     }
 
-    writeln!(f, "typedef struct {{")?;
-    writeln!(f, "\tActorState actor_state;")?;
+    writeln!(headerf, "typedef struct {{")?;
+    writeln!(headerf, "\tActorState actor_state;")?;
     for (_, v) in &target.vars {
-        writeln!(f, "\tValue var_{v};")?;
+        writeln!(headerf, "\tValue var_{v};")?;
     }
     for i in 0..target.sequences.len() {
-        writeln!(f, "\tSequence{i}State sequence{i}_state;")?;
+        writeln!(headerf, "\t{}Sequence{i}State sequence{i}_state;", target.name)?;
     }
-    writeln!(f, "}} Actor{};", target.name)?;
-    writeln!(f)?;
+    writeln!(headerf, "}} Actor{};", target.name)?;
+    writeln!(headerf)?;
 
-    f.write_all(&func_writer)?;
+    writeln!(sourcef, "/// update every sequence of this actor")?;
+    writeln!(
+        sourcef,
+        "void run_{}(Actor{} *a, GlobalState *g) {{",
+        target.name, target.name
+    )?;
+    for i in 0..target.sequences.len() {
+        writeln!(sourcef, "\trun_{}_sequence{i}(a, &a->sequence{i}_state, g);", target.name)?;
+    }
+    writeln!(sourcef, "}}")?;
+    writeln!(sourcef)?;
+
+    writeln!(sourcef, "Sprite sprites_{}[{}] = {{ 0 }};", target.name, target.costumes.len())?;
+    writeln!(sourcef, "void init_sprites_{}() {{", target.name)?;
+    for (i, costume) in target.costumes.iter().enumerate() {
+        writeln!(sourcef, "\t// Load {}", costume.name)?;
+        writeln!(sourcef, "\tsprites_{}[{i}].rotation_center_x = {};", target.name, costume.rotation_center_x)?;
+        writeln!(sourcef, "\tsprites_{}[{i}].rotation_center_y = {};", target.name, costume.rotation_center_y)?;
+        writeln!(sourcef, "\tsprites_{}[{i}].texture = LoadTexture(\"{}\");", target.name, costume.filename)?;
+    }
+    writeln!(sourcef, "}}")?;
 
     Ok(())
 }
 
-pub fn generate(out: &mut impl Write, targets: &[parser::Target], globals: &VarMap) -> io::Result<()> {
-    writeln!(out, "#include <stdio.h>")?;
-    writeln!(out, "#include \"runtime.h\"")?;
-    writeln!(out)?;
+pub fn generate(headerf: &mut impl Write, sourcef: &mut impl Write, targets: &[parser::Target], globals: &VarMap) -> io::Result<()> {
+    writeln!(headerf, "#include <stdio.h>")?;
+    writeln!(headerf, "#include \"runtime.h\"")?;
+    writeln!(headerf)?;
 
-    writeln!(out, "typedef struct {{")?;
-    writeln!(out, "\tbool flag_clicked;")?;
-    for global in globals.values() {
-        writeln!(out, "\tValue var_{global};")?;
-    }
-    writeln!(out, "}} GlobalState;")?;
+    writeln!(sourcef, "#include \"output.h\"")?;
+    writeln!(sourcef)?;
 
     for target in targets {
-        generate_target(out, target, &globals)?;
+        generate_target(headerf, sourcef, target, &globals)?;
     }
+
+    writeln!(headerf, "typedef struct {{")?;
+    writeln!(headerf, "\tbool flag_clicked;")?;
+    for global in globals.values() {
+        writeln!(headerf, "\tValue var_{global};")?;
+    }
+    writeln!(headerf, "}} GlobalState;")?;
 
     Ok(())
 }
