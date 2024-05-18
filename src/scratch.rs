@@ -63,7 +63,7 @@ pub struct Target {
     pub broadcasts: HashMap<String, Value>,
     pub blocks: HashMap<String, Block>,
     pub comments: HashMap<String, Value>,
-    pub currentCostume: u32,
+    pub currentCostume: usize,
     pub costumes: Vec<Costume>,
     pub sounds: Vec<Sound>,
     pub layerOrder: i32,

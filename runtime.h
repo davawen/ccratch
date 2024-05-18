@@ -1,3 +1,5 @@
+#pragma once
+
 #include <stdlib.h>
 #include <inttypes.h>
 #include <stdbool.h>
@@ -15,7 +17,8 @@ typedef struct {
     int x;
     int y;
     int size;
-    int angle;
+    int direction;
+	bool visible;
     int sprite_index;
 	Sprite *sprites;
 } ActorState;
@@ -72,3 +75,5 @@ static void convert_to_bool(Value *v) {
 	v->b = value_as_bool(*v);
 	v->type = VALUE_BOOL;
 }
+
+void draw_actor(ActorState *a);

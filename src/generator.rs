@@ -400,15 +400,29 @@ fn generate_target(headerf: &mut impl Write, sourcef: &mut impl Write, target: &
         linearize(headerf, sourcef, target, globals, i)?;
     }
 
-    writeln!(headerf, "typedef struct {{")?;
-    writeln!(headerf, "\tActorState actor_state;")?;
-    for (_, v) in &target.vars {
-        writeln!(headerf, "\tValue var_{v};")?;
+    match &target.kind {
+        parser::TargetKind::Stage { .. } => {
+            writeln!(headerf, "typedef struct {{")?;
+            writeln!(headerf, "\tint current_backdrop;")?;
+            writeln!(headerf, "\tSprite *backdrops;")?;
+            writeln!(headerf, "\tint tempo;")?;
+            for i in 0..target.sequences.len() {
+                writeln!(headerf, "\tStageSequence{i}State sequence{i}_state;")?;
+            }
+            writeln!(headerf, "}} ActorStage;")?;
+        },
+        parser::TargetKind::Sprite { .. } => {
+            writeln!(headerf, "typedef struct {{")?;
+            writeln!(headerf, "\tActorState actor_state;")?;
+            for (_, v) in &target.vars {
+                writeln!(headerf, "\tValue var_{v};")?;
+            }
+            for i in 0..target.sequences.len() {
+                writeln!(headerf, "\t{}Sequence{i}State sequence{i}_state;", target.name)?;
+            }
+            writeln!(headerf, "}} Actor{};", target.name)?;
+        },
     }
-    for i in 0..target.sequences.len() {
-        writeln!(headerf, "\t{}Sequence{i}State sequence{i}_state;", target.name)?;
-    }
-    writeln!(headerf, "}} Actor{};", target.name)?;
     writeln!(headerf)?;
 
     writeln!(sourcef, "/// update every sequence of this actor")?;
@@ -453,7 +467,117 @@ pub fn generate(headerf: &mut impl Write, sourcef: &mut impl Write, targets: &[p
     for global in globals.values() {
         writeln!(headerf, "\tValue var_{global};")?;
     }
+    writeln!(headerf, "\tActorStage stage;")?;
+    for target in targets {
+        if matches!(target.kind, parser::TargetKind::Stage { .. }) { continue }
+
+        writeln!(headerf, "\tint num_{};", target.name)?;
+        writeln!(headerf, "\tActor{} *list_{};", target.name, target.name)?;
+    }
     writeln!(headerf, "}} GlobalState;")?;
+    writeln!(headerf)?;
+
+    generate_global_functions(headerf, sourcef, targets, globals)?;
 
     Ok(())
 }
+
+fn generate_global_functions(headerf: &mut impl Write, sourcef: &mut impl Write, targets: &[parser::Target], globals: &VarMap) -> io::Result<()> {
+    writeln!(headerf, "GlobalState init_global();")?;
+    writeln!(headerf, "void run_global(GlobalState *g);")?;
+    writeln!(headerf, "void render_global(GlobalState *g);")?;
+
+    writeln!(sourcef, "/// initialize every scratch object (raylib needs to be initialized first)")?;
+    writeln!(sourcef, "GlobalState init_global() {{")?;
+
+    writeln!(sourcef, "\t// Load every sprite")?;
+    for target in targets {
+        writeln!(sourcef, "\tinit_sprites_{}();", target.name)?;
+    }
+    writeln!(sourcef)?;
+
+    writeln!(sourcef, "\t// Initialize every actor")?;
+    for target in targets {
+        match &target.kind {
+            parser::TargetKind::Stage { tempo } => {
+                writeln!(sourcef, "\tActorStage stage = {{")?;
+                writeln!(sourcef, "\t\t.current_backdrop = {},", target.current_costume)?;
+                writeln!(sourcef, "\t\t.backdrops = sprites_Stage,")?;
+                writeln!(sourcef, "\t\t.tempo = {tempo},")?;
+                for i in 0..target.sequences.len() {
+                    writeln!(sourcef, "\t\t.sequence{i}_state = (StageSequence{i}State) {{ 0 }},")?;
+                }
+                writeln!(sourcef, "\t}};")?;
+            },
+            parser::TargetKind::Sprite { visible, x, y, size, direction, draggable: _, rotation_style: _ } => {
+                let name = &target.name;
+                writeln!(sourcef, "\tActor{name} *list_{name} = malloc(sizeof(Actor{name}));")?;
+                // TODO: Initalize default variable value
+
+                writeln!(sourcef, "\tlist_{name}->actor_state = (ActorState) {{")?;
+                writeln!(sourcef, "\t\t.x = {x},")?;
+                writeln!(sourcef, "\t\t.y = {y},")?;
+                writeln!(sourcef, "\t\t.size = {size},")?;
+                writeln!(sourcef, "\t\t.direction = {direction},")?;
+                writeln!(sourcef, "\t\t.visible = {visible},")?;
+                writeln!(sourcef, "\t\t.sprite_index = {},", target.current_costume)?;
+                writeln!(sourcef, "\t\t.sprites = sprites_{name}")?;
+                writeln!(sourcef, "\t}};")?;
+                for i in 0..target.sequences.len() {
+                    writeln!(sourcef, "\tlist_{name}->sequence{i}_state = ({name}Sequence{i}State) {{ 0 }};")?;
+                }
+            },
+        }
+        writeln!(sourcef)?;
+    }
+
+    writeln!(sourcef, "\t// Initialize global state")?;
+    writeln!(sourcef, "\treturn (GlobalState) {{")?;
+
+    writeln!(sourcef, "\t\t.flag_clicked = false,")?;
+    for var in globals.values() {
+        // TODO: Initialize default variable value
+        writeln!(sourcef, "\t\t.var_{var} = (Value) {{ .type = VALUE_NUM, .n = 0 }},")?;
+    }
+
+    for target in targets {
+        if matches!(target.kind, parser::TargetKind::Stage { .. }) {
+            writeln!(sourcef, "\t\t.stage = stage,")?;
+        } else {
+            let name = &target.name;
+            writeln!(sourcef, "\t\t.num_{name} = 1,")?;
+            writeln!(sourcef, "\t\t.list_{name} = list_{name},")?;
+        }
+    }
+
+    writeln!(sourcef, "\t}};")?;
+    writeln!(sourcef, "}}")?;
+    writeln!(sourcef)?;
+
+    writeln!(sourcef, "void run_global(GlobalState *g) {{")?;
+
+    for target in targets {
+        match target.kind {
+            parser::TargetKind::Stage { .. } => {
+                for i in 0..target.sequences.len() {
+                    writeln!(sourcef, "\trun_Stage_sequence{i}(&g->stage, &g->stage.sequence{i}_state, g);")?;
+                }
+            }
+            parser::TargetKind::Sprite { .. } => {
+                let name = &target.name;
+                writeln!(sourcef, "\tfor (int i = 0; i < g->num_{name}; i++) {{")?;
+                writeln!(sourcef, "\t\tActor{name} *a = &g->list_{name}[i];")?;
+                for i in 0..target.sequences.len() {
+                    writeln!(sourcef, "\t\trun_{name}_sequence{i}(a, &a->sequence{i}_state, g);")?;
+                }
+                writeln!(sourcef, "\t}}")?;
+            }
+        }
+        writeln!(sourcef)?;
+    }
+
+    writeln!(sourcef, "}}")?;
+
+    Ok(())
+}
+

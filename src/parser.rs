@@ -67,13 +67,36 @@ pub struct Costume {
 }
 
 #[derive(Debug)]
+pub enum RotationStyle {
+    AllAround,
+    LeftRight,
+    DontRotate
+}
+
+#[derive(Debug)]
+pub enum TargetKind {
+    Stage { tempo: u32 },
+    Sprite {
+        visible: bool,
+        x: i32,
+        y: i32,
+        size: i32,
+        direction: i32,
+        draggable: bool,
+        rotation_style: RotationStyle
+    }
+}
+
+#[derive(Debug)]
 pub struct Target {
     pub name: String,
     pub sequences: Vec<Sequence>,
     /// Map from variable ID to C variable name
     pub vars: HashMap<String, String>,
+    pub current_costume: usize,
     pub costumes: Vec<Costume>,
     pub sounds: Vec<scratch::Sound>,
+    pub kind: TargetKind
 }
 
 fn parse_field_clone_option(v: &(serde_json::Value, Option<serde_json::Value>)) -> String {
@@ -281,12 +304,33 @@ fn parse_target(mut target: scratch::Target, globals: &mut VarMap, global_hashse
         }
     }).collect();
 
+    let kind = if target.isStage {
+        TargetKind::Stage { tempo: target.tempo.unwrap() }
+    } else {
+        TargetKind::Sprite {
+            x: target.x.unwrap(),
+            y: target.y.unwrap(),
+            size: target.size.unwrap(),
+            direction: target.direction.unwrap(),
+            visible: target.visible.unwrap(),
+            draggable: target.draggable.unwrap(),
+            rotation_style: match target.rotationStyle.unwrap().as_str() {
+                "all around" => RotationStyle::AllAround,
+                "left-right" => RotationStyle::LeftRight,
+                "don't rotate" => RotationStyle::DontRotate,
+                _ => unreachable!()
+            }
+        }
+    };
+
     Target {
         name: target.name,
         sequences,
         vars: sanitize_varnames(target.isStage, target.variables, globals, global_hashset),
+        current_costume: target.currentCostume,
         costumes,
         sounds: target.sounds,
+        kind
     }
 }
 
