@@ -443,7 +443,7 @@ fn generate_target(headerf: &mut impl Write, sourcef: &mut impl Write, target: &
         writeln!(sourcef, "\t// Load {}", costume.name)?;
         writeln!(sourcef, "\tsprites_{}[{i}].rotation_center_x = {};", target.name, costume.rotation_center_x)?;
         writeln!(sourcef, "\tsprites_{}[{i}].rotation_center_y = {};", target.name, costume.rotation_center_y)?;
-        writeln!(sourcef, "\tsprites_{}[{i}].texture = LoadTexture(\"{}\");", target.name, costume.filename)?;
+        writeln!(sourcef, "\tsprites_{}[{i}].texture = LoadTexture(\"project/{}\");", target.name, costume.filename)?;
     }
     writeln!(sourcef, "}}")?;
 
@@ -555,7 +555,6 @@ fn generate_global_functions(headerf: &mut impl Write, sourcef: &mut impl Write,
     writeln!(sourcef)?;
 
     writeln!(sourcef, "void run_global(GlobalState *g) {{")?;
-
     for target in targets {
         match target.kind {
             parser::TargetKind::Stage { .. } => {
@@ -573,6 +572,23 @@ fn generate_global_functions(headerf: &mut impl Write, sourcef: &mut impl Write,
                 writeln!(sourcef, "\t}}")?;
             }
         }
+        writeln!(sourcef)?;
+    }
+    writeln!(sourcef, "}}")?;
+    writeln!(sourcef)?;
+
+    writeln!(sourcef, "void render_global(GlobalState *g) {{")?;
+
+    // always draw stage first
+    writeln!(sourcef, "\tDrawTexture(g->stage.backdrops[g->stage.current_backdrop].texture, 0, 0, WHITE);")?;
+
+    for target in targets {
+        if matches!(target.kind, parser::TargetKind::Stage { .. }) { continue }
+
+        let name = &target.name;
+        writeln!(sourcef, "\tfor (int i = 0; i < g->num_{name}; i++) {{")?;
+        writeln!(sourcef, "\t\tdraw_actor(&g->list_{name}[i].actor_state);")?;
+        writeln!(sourcef, "\t}}")?;
         writeln!(sourcef)?;
     }
 
