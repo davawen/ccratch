@@ -36,9 +36,11 @@ pub enum Value {
 #[derive(Debug)]
 pub enum Block {
     WhenFlagClicked,
+    MoveSteps{ steps: Value },
     CreateCloneOf { actor: Value },
     CreateCloneOfMenu { actor: String },
     SetVariableTo { value: Value, var: Variable },
+    Wait { duration: Value },
     Repeat { times: Value, branch: Sequence },
     IfCondition { condition: Value, branch: Sequence },
     Add { lhs: Value, rhs: Value },
@@ -171,10 +173,18 @@ fn parse_block(blocks: &HashMap<String, scratch::Block>, block: &scratch::Block)
 
     match block.opcode.as_str() {
         "event_whenflagclicked" => Block::WhenFlagClicked,
+        "motion_movesteps" => {
+            let steps = parse_value(blocks, &block.inputs["STEPS"]);
+            Block::MoveSteps { steps }
+        }
         "looks_sayforsecs" => {
             let message = parse_value(blocks, &block.inputs["MESSAGE"]);
             let secs = parse_value(blocks, &block.inputs["SECS"]);
             Block::SayForSecs { message, secs }
+        }
+        "control_wait" => {
+            let duration = parse_value(blocks, &block.inputs["DURATION"]);
+            Block::Wait { duration }
         }
         "control_repeat" => {
             let times = parse_value(blocks, &block.inputs["TIMES"]);

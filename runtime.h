@@ -76,4 +76,8 @@ static void convert_to_bool(Value *v) {
 	v->type = VALUE_BOOL;
 }
 
+static float scratch_degrees_to_radians(int direction) {
+	return (-direction + 90) * PI / 180.0;
+}
+
 void draw_actor(ActorState *a);

@@ -132,6 +132,13 @@ fn linearize_block(f: &mut impl Write, args: &mut GeneratorArgs, block: &Block) 
             writeln!(f, "\t\tif (g->flag_clicked) s->state = {};", *args.state + 1)?;
             return Ok(None);
         }
+        Block::MoveSteps { steps } => {
+            let steps = compute_value(f, args, steps)?;
+            writeln!(f, "\t\tconvert_to_number(&{steps});")?;
+            writeln!(f, "\t\tfloat direction = scratch_degrees_to_radians(a->actor_state.direction);")?;
+            writeln!(f, "\t\ta->actor_state.x += cosf(direction)*{steps}.n;")?;
+            writeln!(f, "\t\ta->actor_state.y += sinf(direction)*{steps}.n;")?;
+        }
         Block::CreateCloneOf { actor } => {
             // TODO:
             let _actor = compute_value(f, args, actor);
@@ -141,6 +148,18 @@ fn linearize_block(f: &mut impl Write, args: &mut GeneratorArgs, block: &Block) 
         Block::SetVariableTo { value, var } => {
             let value = compute_value(f, args, value)?;
             writeln!(f, "\t\t{} = {};", get_var(args, &var.id), value)?;
+        }
+        Block::Wait { duration } => {
+            let duration = compute_value(f, args, duration)?;
+            writeln!(f, "\t\tconvert_to_number(&{duration});")?;
+            writeln!(f, "\t\ts->time = GetTime() + {duration}.n;")?;
+            writeln!(f, "\t\ts->state = {};", *args.state + 1)?;
+
+            end_case(f, args.state)?;
+            start_case(f, args.state)?;
+
+            writeln!(f, "\t\tif (GetTime() >= s->time) s->state = {};", *args.state + 1)?;
+            return Ok(None);
         }
         Block::Repeat { times, branch } => {
             *args.state += 1; // make the branch think we ended this case
@@ -197,21 +216,33 @@ fn linearize_block(f: &mut impl Write, args: &mut GeneratorArgs, block: &Block) 
             start_case(f, args.state)?; // start a new case to counter act the end case automatically added
         }
         Block::SayForSecs { message, secs } => {
+            // printing part
             let message = compute_value(f, args, &message)?;
-
+            let name = &args.target.name;
             writeln!(
                 f,
-                "\t\tif ({message}.type == VALUE_NUM) printf(\"%f\\n\", {message}.n);"
+                "\t\tif ({message}.type == VALUE_NUM) printf(\"{name}: %f\\n\", {message}.n);"
             )?;
             writeln!(
                 f,
-                "\t\telse if ({message}.type == VALUE_STRING) printf(\"%s\\n\", {message}.s);"
+                "\t\telse if ({message}.type == VALUE_STRING) printf(\"{name}: %s\\n\", {message}.s);"
             )?;
-            writeln!(f, "\t\telse if ({message}.type == VALUE_COLOR) printf(\"#%02X%02X%02X\\n\", {message}.c.r, {message}.c.g, {message}.c.b);")?;
+            writeln!(f, "\t\telse if ({message}.type == VALUE_COLOR) printf(\"{name}: #%02X%02X%02X\\n\", {message}.c.r, {message}.c.g, {message}.c.b);")?;
             writeln!(f, "\t\telse if ({message}.type == VALUE_BOOL) {{")?;
-            writeln!(f, "\t\t\tif ({message}.b) printf(\"true\\n\");")?;
-            writeln!(f, "\t\t\telse printf(\"false\\n\");")?;
+            writeln!(f, "\t\t\tif ({message}.b) printf(\"{name}: true\\n\");")?;
+            writeln!(f, "\t\t\telse printf(\"{name}: false\\n\");")?;
             writeln!(f, "\t\t}}")?;
+
+            // waiting part
+            let duration = compute_value(f, args, secs)?;
+            writeln!(f, "\t\tconvert_to_number(&{duration});")?;
+            writeln!(f, "\t\ts->time = GetTime() + {duration}.n;")?;
+            writeln!(f, "\t\ts->state = {};", *args.state + 1)?;
+
+            end_case(f, args.state)?;
+            start_case(f, args.state)?;
+
+            writeln!(f, "\t\tif (GetTime() >= s->time) s->state = {};", *args.state + 1)?;
         }
         Block::CreateCloneOfMenu { actor } => {
             let v = generate_var_name();
@@ -452,6 +483,7 @@ fn generate_target(headerf: &mut impl Write, sourcef: &mut impl Write, target: &
 
 pub fn generate(headerf: &mut impl Write, sourcef: &mut impl Write, targets: &[parser::Target], globals: &VarMap) -> io::Result<()> {
     writeln!(headerf, "#include <stdio.h>")?;
+    writeln!(headerf, "#include <math.h>")?;
     writeln!(headerf, "#include \"runtime.h\"")?;
     writeln!(headerf)?;
 
