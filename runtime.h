@@ -21,6 +21,13 @@ typedef struct {
 	bool visible;
     int sprite_index;
 	Sprite *sprites;
+
+	/// wether this actor is currently saying something (NULL if not)
+	char *saying;
+	/// time at which the text should be removed
+	float say_end;
+	// whether the string should be free'd
+	bool say_should_free;
 } ActorState;
 
 enum ValueType {

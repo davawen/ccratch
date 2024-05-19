@@ -5,7 +5,7 @@
 void draw_actor(ActorState *a) {
     Sprite *sprite = &a->sprites[a->sprite_index];
     Rectangle source = { .x = 0, .y = 0, .width = sprite->texture.width, .height = sprite->texture.height };
-    Rectangle dest = { .x = a->x + 240, .y = a->y + 180, .width = source.width * a->size / 100, .height = source.height * a->size / 100 };
+    Rectangle dest = { .x = a->x + 240, .y = -a->y + 180, .width = source.width * a->size / 100, .height = source.height * a->size / 100 };
     Vector2 origin = { sprite->rotation_center_x*source.width/100, sprite->rotation_center_y*source.height/100 };
 
 	// scratch direction is in degrees
@@ -19,6 +19,26 @@ void draw_actor(ActorState *a) {
 	// raylib_dir = -scratch_dir + 90
 
     DrawTexturePro(sprite->texture, source, dest, origin, -a->direction + 90, WHITE);
+
+	// readjust `dest` based on origin (so it lines up with the texture drawn above)
+	dest.x -= sprite->rotation_center_x*dest.width/100.0;
+	dest.y -= sprite->rotation_center_y*dest.height/100.0;
+
+	if (a->saying != NULL) {
+		float text_x = dest.x + dest.width + 10.0;
+		float text_y = dest.y - 30.0;
+
+		float width = MeasureText(a->saying, 20);
+		DrawRectangle(text_x - 5, text_y - 5, width + 10, 30, LIGHTGRAY);
+
+		DrawText(a->saying, text_x, text_y, 20, BLACK);
+
+		if (GetTime() > a->say_end) {
+			if (a->say_should_free) free(a->saying);
+			a->saying = NULL;
+			a->say_end = INFINITY;
+		}
+	}
 }
 
 int main() {

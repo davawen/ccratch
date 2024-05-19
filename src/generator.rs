@@ -218,31 +218,27 @@ fn linearize_block(f: &mut impl Write, args: &mut GeneratorArgs, block: &Block) 
         Block::SayForSecs { message, secs } => {
             // printing part
             let message = compute_value(f, args, &message)?;
-            let name = &args.target.name;
-            writeln!(
-                f,
-                "\t\tif ({message}.type == VALUE_NUM) printf(\"{name}: %f\\n\", {message}.n);"
-            )?;
-            writeln!(
-                f,
-                "\t\telse if ({message}.type == VALUE_STRING) printf(\"{name}: %s\\n\", {message}.s);"
-            )?;
-            writeln!(f, "\t\telse if ({message}.type == VALUE_COLOR) printf(\"{name}: #%02X%02X%02X\\n\", {message}.c.r, {message}.c.g, {message}.c.b);")?;
-            writeln!(f, "\t\telse if ({message}.type == VALUE_BOOL) {{")?;
-            writeln!(f, "\t\t\tif ({message}.b) printf(\"{name}: true\\n\");")?;
-            writeln!(f, "\t\t\telse printf(\"{name}: false\\n\");")?;
-            writeln!(f, "\t\t}}")?;
+            writeln!(f, "\t\tchar *output = malloc(1024);")?;
+            writeln!(f, "\t\tif ({message}.type == VALUE_NUM) snprintf(output, 1024, \"%f\", {message}.n);")?;
+            writeln!(f, "\t\telse if ({message}.type == VALUE_STRING) strlcpy(output, {message}.s, 1024);")?;
+            writeln!(f, "\t\telse if ({message}.type == VALUE_COLOR) snprintf(output, 1024, \"#%02X%02X%02X\", {message}.c.r, {message}.c.g, {message}.c.b);")?;
+            writeln!(f, "\t\telse if ({message}.type == VALUE_BOOL) strcpy(output, {message}.b ? \"true\" : \"false\");")?;
 
-            // waiting part
             let duration = compute_value(f, args, secs)?;
             writeln!(f, "\t\tconvert_to_number(&{duration});")?;
             writeln!(f, "\t\ts->time = GetTime() + {duration}.n;")?;
             writeln!(f, "\t\ts->state = {};", *args.state + 1)?;
 
+            writeln!(f, "\t\ta->actor_state.saying = output;")?;
+            writeln!(f, "\t\ta->actor_state.say_end = s->time;")?;
+            writeln!(f, "\t\ta->actor_state.say_should_free = true;")?;
+
+            // waiting part
             end_case(f, args.state)?;
             start_case(f, args.state)?;
 
             writeln!(f, "\t\tif (GetTime() >= s->time) s->state = {};", *args.state + 1)?;
+            return Ok(None);
         }
         Block::CreateCloneOfMenu { actor } => {
             let v = generate_var_name();
@@ -483,6 +479,7 @@ fn generate_target(headerf: &mut impl Write, sourcef: &mut impl Write, target: &
 
 pub fn generate(headerf: &mut impl Write, sourcef: &mut impl Write, targets: &[parser::Target], globals: &VarMap) -> io::Result<()> {
     writeln!(headerf, "#include <stdio.h>")?;
+    writeln!(headerf, "#include <string.h>")?;
     writeln!(headerf, "#include <math.h>")?;
     writeln!(headerf, "#include \"runtime.h\"")?;
     writeln!(headerf)?;
