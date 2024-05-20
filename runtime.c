@@ -36,6 +36,19 @@ void convert_to_bool(Value *v) {
 	v->type = VALUE_BOOL;
 }
 
+void convert_to_rcstr(Value *v) {
+	rcstr output;
+	if (v->type == VALUE_STRING) return;
+	else {
+		output = alloc_rcstr(128);
+		if (v->type == VALUE_NUM) snprintf(output.ptr, 128, "%f", v->n);
+		else if (v->type == VALUE_COLOR) snprintf(output.ptr, 128, "#%02X%02X%02X", v->c.r, v->c.g, v->c.b);
+		else if (v->type == VALUE_BOOL) strcpy(output.ptr, v->b ? "true" : "false");
+		v->s = output;
+		v->type = VALUE_STRING;
+	}
+}
+
 void draw_actor(ActorState *a) {
     Sprite *sprite = &a->sprites[a->sprite_index];
     Rectangle source = { .x = 0, .y = 0, .width = sprite->texture.width, .height = sprite->texture.height };

@@ -98,6 +98,81 @@ static void free_rcstr(rcstr s) {
 
 void convert_to_number(Value *v);
 void convert_to_bool(Value *v);
+void convert_to_rcstr(Value *v);
+
+static inline Value copy_value(Value v) {
+	if (v.type == VALUE_STRING) {
+		v.s = copy_rcstr(v.s);
+	}
+	return v;
+}
+
+static inline void free_value(Value v) {
+	if (v.type == VALUE_STRING) {
+		free_rcstr(v.s);
+	}
+}
+
+// define operations on values
+#define M_VALUE_ARITHMETIC_OP(opname, op) \
+	static inline Value value_##opname(Value a, Value b) { \
+		convert_to_number(&a); \
+		convert_to_number(&b); \
+		a.n = a.n op b.n; \
+		return a; \
+	}
+
+M_VALUE_ARITHMETIC_OP(add, +);
+M_VALUE_ARITHMETIC_OP(sub, -);
+M_VALUE_ARITHMETIC_OP(mul, *);
+M_VALUE_ARITHMETIC_OP(div, /);
+
+#undef M_VALUE_ARITHMETIC_OP
+
+#define M_VALUE_LOGIC_OP(opname, op) \
+	static inline Value value_##opname(Value a, Value b) { \
+		convert_to_bool(&a);\
+		convert_to_bool(&b);\
+		a.b = a.b op b.b; \
+		return a; \
+	}
+
+M_VALUE_LOGIC_OP(and, &&);
+M_VALUE_LOGIC_OP(or, ||);
+
+static inline Value value_not(Value v) {
+	convert_to_bool(&v);
+	v.b = !v.b;
+	return v;
+}
+
+#undef M_VALUE_LOGIC_OP
+
+#define M_VALUE_COMPARISON_OP(opname, op) \
+	static inline Value value_##opname(Value a, Value b) { \
+		if (a.type == VALUE_STRING || b.type == VALUE_STRING) { \
+			a = copy_value(a); \
+			b = copy_value(b); \
+			convert_to_rcstr(&a); \
+			convert_to_rcstr(&b); \
+			bool res = strcmp(a.s.ptr, b.s.ptr) op 0; \
+			free_value(a); \
+			free_value(b); \
+			a.b = res; \
+		} else { \
+			convert_to_number(&a); \
+			convert_to_number(&b); \
+			a.b = a.n op b.n; \
+		} \
+		a.type = VALUE_BOOL; \
+		return a; \
+	}
+
+M_VALUE_COMPARISON_OP(greater_than, >);
+M_VALUE_COMPARISON_OP(lesser_than, <);
+M_VALUE_COMPARISON_OP(equal, ==);
+
+#undef M_VALUE_COMPARISON_OP
 
 static float scratch_degrees_to_radians(int direction) {
 	return (-direction + 90) * PI / 180.0;
