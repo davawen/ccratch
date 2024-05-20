@@ -286,11 +286,29 @@ fn sanitize_varnames(is_stage: bool, vars: HashMap<String, scratch::Variable>, g
     out
 }
 
+/// Checks if a block is allowed to start a sequence
+/// This used to remove "floating blocks" that cannot start
+fn is_block_real_toplevel(opcode: &str) -> bool {
+    matches!(
+        opcode,
+        "event_whenflagclicked" |
+        "event_whenkeypressed" |
+        "event_whenthisspriteclicked" |
+        "event_whenstageclicked" |
+        "event_whenbackdropswitchesto" |
+        "event_whengreaterthan" |
+        "event_whenbroadcastreceived" |
+        "control_start_as_clone"
+    )
+}
+
 fn parse_target(mut target: scratch::Target, globals: &mut VarMap, global_hashset: &mut HashSet<String>) -> Target {
     let mut sequences = vec![];
 
     for (_, block) in &target.blocks {
         if block.topLevel {
+            if !is_block_real_toplevel(&block.opcode) { continue }
+
             sequences.push(parse_sequence(&target.blocks, &block));
         }
     }

@@ -2,6 +2,40 @@
 #include "runtime.h"
 #include "output.h"
 
+static float value_as_number(Value v) {
+	if (v.type == VALUE_NUM) return v.n;
+	else if (v.type == VALUE_BOOL) return v.b;
+	else if (v.type == VALUE_STRING) {
+		char *end;
+		float n = strtof(v.s.ptr, &end);
+		if (*end == '\0') return n;
+	}
+	return 0.0;
+}
+
+static bool value_as_bool(Value v) {
+	if (v.type == VALUE_BOOL) return v.b;
+	else if (v.type == VALUE_NUM) return v.n != 0;
+	else if (v.type == VALUE_STRING) {
+		return strcmp(v.s.ptr, "true") == 0;
+	}
+	return false;
+}
+
+void convert_to_number(Value *v) {
+	float n = value_as_number(*v);
+	if (v->type == VALUE_STRING) free_rcstr(v->s);
+	v->n = n;
+	v->type = VALUE_NUM;
+}
+
+void convert_to_bool(Value *v) {
+	bool b = value_as_bool(*v);
+	if (v->type == VALUE_STRING) free_rcstr(v->s);
+	v->b = b;
+	v->type = VALUE_BOOL;
+}
+
 void draw_actor(ActorState *a) {
     Sprite *sprite = &a->sprites[a->sprite_index];
     Rectangle source = { .x = 0, .y = 0, .width = sprite->texture.width, .height = sprite->texture.height };
@@ -24,18 +58,18 @@ void draw_actor(ActorState *a) {
 	dest.x -= sprite->rotation_center_x*dest.width/100.0;
 	dest.y -= sprite->rotation_center_y*dest.height/100.0;
 
-	if (a->saying != NULL) {
+	if (a->saying.ptr != NULL) {
 		float text_x = dest.x + dest.width + 10.0;
 		float text_y = dest.y - 30.0;
 
-		float width = MeasureText(a->saying, 20);
-		DrawRectangle(text_x - 5, text_y - 5, width + 10, 30, LIGHTGRAY);
+		float width = MeasureText(a->saying.ptr, 20);
+		DrawRectangleLines(text_x - 5, text_y - 5, width + 10, 30, LIGHTGRAY);
 
-		DrawText(a->saying, text_x, text_y, 20, BLACK);
+		DrawText(a->saying.ptr, text_x, text_y, 20, BLACK);
 
 		if (GetTime() > a->say_end) {
-			if (a->say_should_free) free(a->saying);
-			a->saying = NULL;
+			free_rcstr(a->saying);
+			a->saying.ptr = NULL;
 			a->say_end = INFINITY;
 		}
 	}

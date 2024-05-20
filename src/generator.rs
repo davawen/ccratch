@@ -83,7 +83,7 @@ fn compute_value(f: &mut impl Write, args: &mut GeneratorArgs, value: &Value) ->
             )?;
         }
         Value::String(s) => {
-            writeln!(f, "\t\tValue {v} = (Value){{ .type = VALUE_STRING, .s = \"{s}\" }};")?;
+            writeln!(f, "\t\tValue {v} = (Value){{ .type = VALUE_STRING, .s = create_rcstr(\"{s}\") }};")?;
         }
         Value::Broadcast(_b) => {
             todo!()
@@ -103,12 +103,12 @@ fn compute_value(f: &mut impl Write, args: &mut GeneratorArgs, value: &Value) ->
 /// `out_type` is the output type of the operation.
 ///
 /// Returns a variable, with type `Value` but whose type will always be `out_type`.
-fn binop_block(
+fn arithmetic_block(
     f: &mut impl Write,
     args: &mut GeneratorArgs,
     lhs: &Value,
     rhs: &Value,
-    mapping_func: &str,
+    convert_func: &str,
     op: &str,
     out_type: ValueType,
 ) -> io::Result<String> {
@@ -117,10 +117,9 @@ fn binop_block(
 
     let member = out_type.union_member();
 
-    writeln!(
-        f,
-        "\t\t{lhs}.{member} = {mapping_func}({lhs}) {op} {mapping_func}({rhs});"
-    )?;
+    writeln!(f, "\t\t{convert_func}(&{lhs});")?;
+    writeln!(f, "\t\t{convert_func}(&{rhs});")?;
+    writeln!(f, "\t\t{lhs}.{member} = {lhs}.{member} {op} {rhs}.{member};")?;
     writeln!(f, "\t\t{lhs}.type = {};", out_type.enum_name())?;
     Ok(lhs)
 }
@@ -213,16 +212,19 @@ fn linearize_block(f: &mut impl Write, args: &mut GeneratorArgs, block: &Block) 
             end_case(f, args.state)?;
             f.write_all(&branch_code)?;
 
-            start_case(f, args.state)?; // start a new case to counter act the end case automatically added
+            start_case(f, args.state)?; // start a new case to counteract the automatically added end case
         }
         Block::SayForSecs { message, secs } => {
             // printing part
             let message = compute_value(f, args, &message)?;
-            writeln!(f, "\t\tchar *output = malloc(1024);")?;
-            writeln!(f, "\t\tif ({message}.type == VALUE_NUM) snprintf(output, 1024, \"%f\", {message}.n);")?;
-            writeln!(f, "\t\telse if ({message}.type == VALUE_STRING) strlcpy(output, {message}.s, 1024);")?;
-            writeln!(f, "\t\telse if ({message}.type == VALUE_COLOR) snprintf(output, 1024, \"#%02X%02X%02X\", {message}.c.r, {message}.c.g, {message}.c.b);")?;
-            writeln!(f, "\t\telse if ({message}.type == VALUE_BOOL) strcpy(output, {message}.b ? \"true\" : \"false\");")?;
+            writeln!(f, "\t\trcstr output;")?;
+            writeln!(f, "\t\tif ({message}.type == VALUE_STRING) output = copy_rcstr({message}.s);")?;
+            writeln!(f, "\t\telse {{")?;
+            writeln!(f, "\t\t\toutput = alloc_rcstr(128);")?;
+            writeln!(f, "\t\t\tif ({message}.type == VALUE_NUM) snprintf(output.ptr, 128, \"%f\", {message}.n);")?;
+            writeln!(f, "\t\t\telse if ({message}.type == VALUE_COLOR) snprintf(output.ptr, 128, \"#%02X%02X%02X\", {message}.c.r, {message}.c.g, {message}.c.b);")?;
+            writeln!(f, "\t\t\telse if ({message}.type == VALUE_BOOL) strcpy(output.ptr, {message}.b ? \"true\" : \"false\");")?;
+            writeln!(f, "\t\t}}")?;
 
             let duration = compute_value(f, args, secs)?;
             writeln!(f, "\t\tconvert_to_number(&{duration});")?;
@@ -231,7 +233,6 @@ fn linearize_block(f: &mut impl Write, args: &mut GeneratorArgs, block: &Block) 
 
             writeln!(f, "\t\ta->actor_state.saying = output;")?;
             writeln!(f, "\t\ta->actor_state.say_end = s->time;")?;
-            writeln!(f, "\t\ta->actor_state.say_should_free = true;")?;
 
             // waiting part
             end_case(f, args.state)?;
@@ -249,103 +250,31 @@ fn linearize_block(f: &mut impl Write, args: &mut GeneratorArgs, block: &Block) 
             return Ok(Some(v));
         }
         Block::Add { lhs, rhs } => {
-            return Ok(Some(binop_block(
-                f,
-                args,
-                lhs,
-                rhs,
-                "value_as_number",
-                "+",
-                ValueType::Num,
-            )?))
+            return Ok(Some(arithmetic_block(f, args, lhs, rhs, "convert_to_number", "+", ValueType::Num)?))
         }
         Block::Sub { lhs, rhs } => {
-            return Ok(Some(binop_block(
-                f,
-                args,
-                lhs,
-                rhs,
-                "value_as_number",
-                "-",
-                ValueType::Num,
-            )?))
+            return Ok(Some(arithmetic_block(f, args, lhs, rhs, "convert_to_number", "-", ValueType::Num)?))
         }
         Block::Mul { lhs, rhs } => {
-            return Ok(Some(binop_block(
-                f,
-                args,
-                lhs,
-                rhs,
-                "value_as_number",
-                "*",
-                ValueType::Num,
-            )?))
+            return Ok(Some(arithmetic_block(f, args, lhs, rhs, "convert_to_number", "*", ValueType::Num)?))
         }
         Block::Div { lhs, rhs } => {
-            return Ok(Some(binop_block(
-                f,
-                args,
-                lhs,
-                rhs,
-                "value_as_number",
-                "/",
-                ValueType::Num,
-            )?))
+            return Ok(Some(arithmetic_block(f, args, lhs, rhs, "convert_to_number", "/", ValueType::Num)?))
         }
         Block::GreaterThan { lhs, rhs } => {
-            return Ok(Some(binop_block(
-                f,
-                args,
-                lhs,
-                rhs,
-                "value_as_number",
-                ">",
-                ValueType::Bool,
-            )?))
+            return Ok(Some(arithmetic_block(f, args, lhs, rhs, "covnert_to_number", ">", ValueType::Bool)?))
         }
         Block::LesserThan { lhs, rhs } => {
-            return Ok(Some(binop_block(
-                f,
-                args,
-                lhs,
-                rhs,
-                "value_as_number",
-                "<",
-                ValueType::Bool,
-            )?))
+            return Ok(Some(arithmetic_block(f, args, lhs, rhs, "convert_to_number", "<", ValueType::Bool)?))
         }
         Block::Equals { lhs, rhs } => {
-            return Ok(Some(binop_block(
-                f,
-                args,
-                lhs,
-                rhs,
-                "value_as_number",
-                "==",
-                ValueType::Bool,
-            )?))
+            return Ok(Some(arithmetic_block(f, args, lhs, rhs, "convert_to_number", "==", ValueType::Bool)?))
         }
         Block::And { lhs, rhs } => {
-            return Ok(Some(binop_block(
-                f,
-                args,
-                lhs,
-                rhs,
-                "value_as_bool",
-                "&&",
-                ValueType::Bool,
-            )?))
+            return Ok(Some(arithmetic_block(f, args, lhs, rhs, "convert_to_bool", "&&", ValueType::Bool)?))
         }
         Block::Or { lhs, rhs } => {
-            return Ok(Some(binop_block(
-                f,
-                args,
-                lhs,
-                rhs,
-                "value_as_bool",
-                "||",
-                ValueType::Bool,
-            )?))
+            return Ok(Some(arithmetic_block(f, args, lhs, rhs, "convert_to_bool", "||", ValueType::Bool)?))
         }
         Block::Not { operand } => {
             let operand = compute_value(f, args, operand)?;
