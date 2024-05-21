@@ -1,4 +1,3 @@
-
 mod scratch;
 mod parser;
 mod generator;

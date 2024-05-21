@@ -1,84 +1,9 @@
 use std::io::{self, Write};
 
 use crate::parser::{self, Block, Value, VarMap};
-use nanoid::nanoid;
 
-struct IndentWriter<W: Write> {
-    writer: W,
-    indent_level: u32,
-    last_write_ended_with_newline: bool
-}
-
-impl<W: Write> Write for IndentWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        for line in buf.split_inclusive(|&c| c == 0xa) { // split on newlines
-            if self.last_write_ended_with_newline {
-                for _ in 0..self.indent_level {
-                    write!(self.writer, "    ")?;
-                }
-                self.last_write_ended_with_newline = false;
-            }
-            self.writer.write_all(line)?;
-
-            if line.last() == Some(&0xa) {
-                self.last_write_ended_with_newline = true;
-            }
-        }
-
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.writer.flush()
-    }
-}
-
-impl<W: Write> IndentWriter<W> {
-    fn new(writer: W) -> Self {
-        IndentWriter { writer, indent_level: 0, last_write_ended_with_newline: true }
-    }
-
-    fn indent(&mut self) {
-        self.indent_level += 1;
-    }
-
-    fn deindent(&mut self) {
-        self.indent_level -= 1;
-    }
-}
-
-type IW<W> = IndentWriter<W>;
-
-fn generate_var_name() -> String {
-    pub const CIDENT: [char; 53] = [
-        '_', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u',
-        'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q',
-        'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
-    ];
-
-    nanoid!(12, &CIDENT)
-}
-
-/// get a variable in a function
-fn get_var<'a>(args: &GeneratorArgs, id: &'_ str) -> String {
-    if let Some(var) = args.target.vars.get(id) {
-        format!("a->var_{var}")
-    } else if let Some(var) = args.globals.get(id) {
-        format!("g->var_{var}")
-    } else {
-        unreachable!(
-            "variable with ID `{id}` does not exists:\n{:#?}\n{:#?}",
-            args.target.vars, args.globals
-        );
-    }
-}
-
-struct GeneratorArgs<'a> {
-    target: &'a parser::Target,
-    globals: &'a VarMap,
-    state: &'a mut u32,
-    new_locals: &'a mut Vec<String>,
-}
+mod util;
+use util::*;
 
 /// returns the variable name of the returned value
 fn compute_value<W: Write>(f: &mut IW<W>, args: &mut GeneratorArgs, value: &Value) -> io::Result<String> {
