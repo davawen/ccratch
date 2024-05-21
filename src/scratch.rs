@@ -12,8 +12,8 @@ pub struct Block {
     pub fields: HashMap<String, (Value, Option<Value>)>,
     pub shadow: bool,
     pub topLevel: bool,
-    pub x: Option<i32>,
-    pub y: Option<i32>,
+    pub x: Option<f32>,
+    pub y: Option<f32>,
     pub comment: Option<String>,
     #[serde(default)]
     pub mutation: Value,
@@ -85,16 +85,16 @@ pub struct Target {
     pub visible: Option<bool>,
     /// Sprite specific
     #[serde(default)]
-    pub x: Option<i32>,
+    pub x: Option<f32>,
     /// Sprite specific
     #[serde(default)]
-    pub y: Option<i32>,
+    pub y: Option<f32>,
     /// Sprite specific
     #[serde(default)]
-    pub size: Option<i32>,
+    pub size: Option<f32>,
     /// Sprite specific
     #[serde(default)]
-    pub direction: Option<i32>,
+    pub direction: Option<f32>,
     /// Sprite specific
     #[serde(default)]
     pub draggable: Option<bool>,

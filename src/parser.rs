@@ -38,18 +38,18 @@ pub enum Motion {
     MoveSteps { steps: Value },
     TurnRight { degrees: Value },
     TurnLeft { degrees: Value },
-    Goto,
+    Goto { dest: GotoDestOption },
     GotoXY { x: Value, y: Value },
-    Glide { secs: Value },
+    Glide { secs: Value, dest: GotoDestOption },
     GlideXY { secs: Value, x: Value, y: Value },
     PointInDrection { degrees: Value },
-    PointTowards,
+    PointTowards { towards: PointTowardsOption },
     ChangeX { by: Value },
     SetX { to: Value },
     ChangeY { by: Value },
     SetY { to: Value },
     IfOnEdgeBounce,
-    SetRotationStyle { style: String },
+    SetRotationStyle { style: RotationStyle },
 
     // Value producing blocks
     XPosition,
@@ -72,8 +72,7 @@ pub enum Control {
     Wait { duration: Value },
     Repeat { times: Value, branch: Sequence },
     IfCondition { condition: Value, branch: Sequence },
-    CreateCloneOf { actor: Value },
-    CreateCloneOfMenu { actor: String },
+    CreateCloneOf { actor: String },
 }
 
 #[derive(Debug)]
@@ -125,6 +124,19 @@ pub struct Costume {
 }
 
 #[derive(Debug)]
+pub enum GotoDestOption {
+    Random,
+    MouseCursor,
+    Actor(String)
+}
+
+#[derive(Debug)]
+pub enum PointTowardsOption {
+    MouseCursor,
+    Actor(String)
+}
+
+#[derive(Debug)]
 pub enum RotationStyle {
     AllAround,
     LeftRight,
@@ -136,10 +148,10 @@ pub enum TargetKind {
     Stage { tempo: u32 },
     Sprite {
         visible: bool,
-        x: i32,
-        y: i32,
-        size: i32,
-        direction: i32,
+        x: f32,
+        y: f32,
+        size: f32,
+        direction: f32,
         draggable: bool,
         rotation_style: RotationStyle
     }
@@ -157,11 +169,55 @@ pub struct Target {
     pub kind: TargetKind
 }
 
-fn parse_field_clone_option(_: &HashMap<String, scratch::Block>, v: &(serde_json::Value, Option<serde_json::Value>)) -> String {
-    v.0.as_str().unwrap().to_owned()
+fn parse_clone_option(blocks: &HashMap<String, scratch::Block>, v: &[serde_json::Value]) -> String {
+    let id = v[1].as_str().expect("expected clone input option to point to a block");
+    let block = &blocks[id];
+    assert!(block.opcode == "control_create_clone_of_menu");
+
+    block.fields["CLONE_OPTION"].0.as_str().unwrap().to_owned()
 }
 
-fn parse_field_variable(_: &HashMap<String, scratch::Block>, v: &(serde_json::Value, Option<serde_json::Value>)) -> Variable {
+fn parse_goto_option(blocks: &HashMap<String, scratch::Block>, v: &[serde_json::Value]) -> GotoDestOption {
+    let id = v[1].as_str().expect("expected goto input option to point to a block");
+    let block = &blocks[id];
+    assert!(block.opcode == "motion_goto_menu" || block.opcode == "motion_glideto_menu");
+
+    match block.fields["TO"].0.as_str().unwrap() {
+        "_random_" => GotoDestOption::Random,
+        "_mouse_" => GotoDestOption::MouseCursor,
+        s => GotoDestOption::Actor(s.to_owned())
+    }
+}
+
+fn parse_towards_option(blocks: &HashMap<String, scratch::Block>, v: &[serde_json::Value]) -> PointTowardsOption {
+    let id = v[1].as_str().expect("expected towards input option to point to a block");
+    let block = &blocks[id];
+    assert!(block.opcode == "motion_pointtowards_menu");
+
+    match block.fields["TOWARDS"].0.as_str().unwrap() {
+        "_mouse_" => PointTowardsOption::MouseCursor,
+        s => PointTowardsOption::Actor(s.to_owned())
+    }
+}
+
+impl std::str::FromStr for RotationStyle {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "all around" => Ok(RotationStyle::AllAround),
+            "left-right" => Ok(RotationStyle::LeftRight),
+            "don't rotate" => Ok(RotationStyle::DontRotate),
+            _ => return Err(())
+        }
+    }
+}
+
+fn parse_rotation_style_option(_: &HashMap<String, scratch::Block>, v: &(serde_json::Value, Option<serde_json::Value>)) -> RotationStyle {
+    v.0.as_str().unwrap().parse().expect("rotation style field attribute to be well formed")
+}
+
+fn parse_variable_option(_: &HashMap<String, scratch::Block>, v: &(serde_json::Value, Option<serde_json::Value>)) -> Variable {
     Variable {
         name: v.0.as_str().unwrap().to_owned(),
         id: v.1.as_ref().unwrap().as_str().unwrap().to_owned(),
@@ -239,27 +295,27 @@ fn parse_block(blocks: &HashMap<String, scratch::Block>, block: &scratch::Block)
 
     // first branch is for inputs and optional fields
     // second is for no inputs and fields
-    // third is for macros with no fields (avoids ending semicolon) and optional inputs
+    // third is for macros with no fields (avoids ending semicolon)
     macro_rules! normal_block {
-        ($kind:path; $($input:ident => $inputname:literal),+; $($field:ident => $func:ident($inputorfield:ident $fieldname:literal)),*) => {
+        ($kind:path; $($value:ident => $valuename:literal),+; $($option:ident => $func:ident($valueoroption:ident $optionname:literal)),*) => {
             {
                 $kind {
-                    $($input: parse_value(blocks, &block.inputs[$inputname])),+,
-                    $($field: $func(blocks, &block.$inputorfield[$fieldname])),*
+                    $($value: parse_value(blocks, &block.inputs[$valuename])),+,
+                    $($option: $func(blocks, &block.$valueoroption[$optionname])),*
                 }.into()
             }
         };
-        ($kind:path; ; $($field:ident => $func:ident($inputorfield:ident $fieldname:literal)),+) => {
+        ($kind:path; ; $($option:ident => $func:ident($valueoroption:ident $optionname:literal)),+) => {
             {
                 $kind {
-                    $($field: $func(blocks, &block.$inputorfield[$fieldname])),+
+                    $($option: $func(blocks, &block.$valueoroption[$optionname])),+
                 }.into()
             }
         };
-        ($kind:path; $($input:ident => $inputname:literal),*) => {
+        ($kind:path; $($value:ident => $valuename:literal),+) => {
             {
                 $kind {
-                    $($input: parse_value(blocks, &block.inputs[$inputname])),*
+                    $($value: parse_value(blocks, &block.inputs[$valuename])),+
                 }.into()
             }
         };
@@ -268,6 +324,24 @@ fn parse_block(blocks: &HashMap<String, scratch::Block>, block: &scratch::Block)
     match block.opcode.as_str() {
         "event_whenflagclicked" => Event::WhenFlagClicked.into(),
         "motion_movesteps" => normal_block!(Motion::MoveSteps; steps => "STEPS"),
+        "motion_turnright" => normal_block!(Motion::TurnRight; degrees => "DEGREES"),
+        "motion_turnleft" => normal_block!(Motion::TurnLeft; degrees => "DEGREES"),
+        "motion_goto" => normal_block!(Motion::Goto;; dest => parse_goto_option(inputs "TO")),
+        "motion_gotoxy" => normal_block!(Motion::GotoXY; x => "X", y => "Y"),
+        // glide has the same parameters as goto
+        "motion_glideto" => normal_block!(Motion::Glide; secs => "SECS"; dest => parse_goto_option(inputs "TO")),
+        "motion_glidesecstoxy" => normal_block!(Motion::GlideXY; secs => "SECS", x => "X", y => "Y"),
+        "motion_pointindirection" => normal_block!(Motion::PointInDrection; degrees => "DIRECTION"),
+        "motion_pointtowards" => normal_block!(Motion::PointTowards;; towards => parse_towards_option(inputs "TOWARDS")),
+        "motion_changexby" => normal_block!(Motion::ChangeX; by => "DX"),
+        "motion_setx" => normal_block!(Motion::SetX; to => "X"),
+        "motion_changeyby" => normal_block!(Motion::ChangeX; by => "DY"),
+        "motion_sety" => normal_block!(Motion::SetX; to => "Y"),
+        "motion_ifonedgebounce" => Motion::IfOnEdgeBounce.into(),
+        "motion_setrotationstyle" => normal_block!(Motion::SetRotationStyle;; style => parse_rotation_style_option(fields "STYLE")),
+        "motion_xposition" => Motion::XPosition.into(),
+        "motion_yposition" => Motion::XPosition.into(),
+        "motion_direction" => Motion::Direction.into(),
         "looks_sayforsecs" => normal_block!(Looks::SayForSecs; message => "MESSAGE", secs => "SECS"),
         "control_wait" => normal_block!(Control::Wait; duration => "DURATION"),
         "control_repeat" => normal_block! { Control::Repeat;
@@ -278,9 +352,8 @@ fn parse_block(blocks: &HashMap<String, scratch::Block>, block: &scratch::Block)
             condition => "CONDITION";
             branch => parse_sequence_from_id_or_empty(inputs "SUBSTACK")
         },
-        "control_create_clone_of" => normal_block!(Control::CreateCloneOf; actor => "CLONE_OPTION"),
-        "control_create_clone_of_menu" => normal_block!(Control::CreateCloneOfMenu;; actor => parse_field_clone_option(fields "CLONE_OPTION")),
-        "data_setvariableto" => normal_block!(Data::SetVariableTo; value => "VALUE"; var => parse_field_variable(fields "VARIABLE")),
+        "control_create_clone_of" => normal_block!(Control::CreateCloneOf;; actor => parse_clone_option(inputs "CLONE_OPTION")),
+        "data_setvariableto" => normal_block!(Data::SetVariableTo; value => "VALUE"; var => parse_variable_option(fields "VARIABLE")),
         "operator_add" => binop!(Add, "NUM"),
         "operator_subtract" => binop!(Sub, "NUM"),
         "operator_multiply" => binop!(Mul, "NUM"),
@@ -411,12 +484,7 @@ fn parse_target(mut target: scratch::Target, globals: &mut VarMap, global_hashse
             direction: target.direction.unwrap(),
             visible: target.visible.unwrap(),
             draggable: target.draggable.unwrap(),
-            rotation_style: match target.rotationStyle.unwrap().as_str() {
-                "all around" => RotationStyle::AllAround,
-                "left-right" => RotationStyle::LeftRight,
-                "don't rotate" => RotationStyle::DontRotate,
-                _ => unreachable!()
-            }
+            rotation_style: target.rotationStyle.unwrap().as_str().parse().expect("expected rotation style attribute to be well formed")
         }
     };
 

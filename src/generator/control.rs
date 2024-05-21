@@ -5,19 +5,10 @@ use super::{compute_value, linearize_sequence, Linearize, util::*};
 impl Linearize for Control {
     fn linearize<W: Write>(&self, f: &mut IW<W>, args: &mut GeneratorArgs) -> io::Result<Return> {
         match self {
-            Control::CreateCloneOf { actor } => {
+            Control::CreateCloneOf { actor: _ } => {
                 // TODO:
-                let _actor = compute_value(f, args, actor);
                 writeln!(f, "printf(\"TODO: create clone code\");")?;
                 writeln!(f, "exit(-1);")?;
-            }
-            Control::CreateCloneOfMenu { actor } => {
-                let v = generate_var_name();
-                writeln!(
-                    f,
-                    "Value {v} = (Value){{ .type = VALUE_STRING, .s = \"{actor}\" }};"
-                )?;
-                return Ok(Return::Value(v));
             }
             Control::Wait { duration } => {
                 let duration = compute_value(f, args, duration)?;

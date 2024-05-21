@@ -23,10 +23,10 @@ typedef struct {
 } Sprite;
 
 typedef struct {
-    int x;
-    int y;
-    int size;
-    int direction;
+    float x;
+    float y;
+    float size;
+    float direction;
 	bool visible;
     int sprite_index;
 	Sprite *sprites;
