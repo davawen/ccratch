@@ -12,6 +12,7 @@ impl Linearize for Motion {
                 writeln!(f, "a->actor_state.x += cosf(direction)*{steps}.n;")?;
                 writeln!(f, "a->actor_state.y += sinf(direction)*{steps}.n;")?;
             }
+            _ => todo!()
         }
 
         Ok(Return::Empty)

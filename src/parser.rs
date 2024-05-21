@@ -36,6 +36,25 @@ pub enum Value {
 #[derive(Debug)]
 pub enum Motion {
     MoveSteps { steps: Value },
+    TurnRight { degrees: Value },
+    TurnLeft { degrees: Value },
+    Goto,
+    GotoXY { x: Value, y: Value },
+    Glide { secs: Value },
+    GlideXY { secs: Value, x: Value, y: Value },
+    PointInDrection { degrees: Value },
+    PointTowards,
+    ChangeX { by: Value },
+    SetX { to: Value },
+    ChangeY { by: Value },
+    SetY { to: Value },
+    IfOnEdgeBounce,
+    SetRotationStyle { style: String },
+
+    // Value producing blocks
+    XPosition,
+    YPosition,
+    Direction
 }
 
 #[derive(Debug)]
@@ -138,11 +157,11 @@ pub struct Target {
     pub kind: TargetKind
 }
 
-fn parse_field_clone_option(v: &(serde_json::Value, Option<serde_json::Value>)) -> String {
+fn parse_field_clone_option(_: &HashMap<String, scratch::Block>, v: &(serde_json::Value, Option<serde_json::Value>)) -> String {
     v.0.as_str().unwrap().to_owned()
 }
 
-fn parse_field_variable(v: &(serde_json::Value, Option<serde_json::Value>)) -> Variable {
+fn parse_field_variable(_: &HashMap<String, scratch::Block>, v: &(serde_json::Value, Option<serde_json::Value>)) -> Variable {
     Variable {
         name: v.0.as_str().unwrap().to_owned(),
         id: v.1.as_ref().unwrap().as_str().unwrap().to_owned(),
@@ -208,44 +227,60 @@ fn parse_block(blocks: &HashMap<String, scratch::Block>, block: &scratch::Block)
         };
     }
 
+    // pretty cursed macro to automate `parse_value` and `parse_*` calls for every input and field of a block. works pretty well though.
+    // here is an example:
+    //   normal_block!(Control::Repeat; times => "TIMES"; branch => parse_sequence_from_id_or_empty(inputs "SUBSTACK")),
+    // was:
+    // {
+    //     let times = parse_value(blocks, &block.inputs["TIMES"]);
+    //     let branch = parse_sequence_from_id_or_empty(blocks, &block.inputs["SUBSTACK"]);
+    //     Control::Repeat { times, branch }.into()
+    // }
+
+    // first branch is for inputs and optional fields
+    // second is for no inputs and fields
+    // third is for macros with no fields (avoids ending semicolon) and optional inputs
+    macro_rules! normal_block {
+        ($kind:path; $($input:ident => $inputname:literal),+; $($field:ident => $func:ident($inputorfield:ident $fieldname:literal)),*) => {
+            {
+                $kind {
+                    $($input: parse_value(blocks, &block.inputs[$inputname])),+,
+                    $($field: $func(blocks, &block.$inputorfield[$fieldname])),*
+                }.into()
+            }
+        };
+        ($kind:path; ; $($field:ident => $func:ident($inputorfield:ident $fieldname:literal)),+) => {
+            {
+                $kind {
+                    $($field: $func(blocks, &block.$inputorfield[$fieldname])),+
+                }.into()
+            }
+        };
+        ($kind:path; $($input:ident => $inputname:literal),*) => {
+            {
+                $kind {
+                    $($input: parse_value(blocks, &block.inputs[$inputname])),*
+                }.into()
+            }
+        };
+    }
+
     match block.opcode.as_str() {
         "event_whenflagclicked" => Event::WhenFlagClicked.into(),
-        "motion_movesteps" => {
-            let steps = parse_value(blocks, &block.inputs["STEPS"]);
-            Motion::MoveSteps { steps }.into()
-        }
-        "looks_sayforsecs" => {
-            let message = parse_value(blocks, &block.inputs["MESSAGE"]);
-            let secs = parse_value(blocks, &block.inputs["SECS"]);
-            Looks::SayForSecs { message, secs }.into()
-        }
-        "control_wait" => {
-            let duration = parse_value(blocks, &block.inputs["DURATION"]);
-            Control::Wait { duration }.into()
-        }
-        "control_repeat" => {
-            let times = parse_value(blocks, &block.inputs["TIMES"]);
-            let branch = parse_sequence_from_id_or_empty(blocks, &block.inputs["SUBSTACK"]);
-            Control::Repeat { times, branch }.into()
-        }
-        "control_if" => {
-            let condition = parse_value(blocks, &block.inputs["CONDITION"]);
-            let branch = parse_sequence_from_id_or_empty(blocks, &block.inputs["SUBSTACK"]);
-            Control::IfCondition { condition, branch }.into()
-        }
-        "control_create_clone_of" => {
-            let actor = parse_value(blocks, &block.inputs["CLONE_OPTION"]);
-            Control::CreateCloneOf { actor }.into()
-        }
-        "control_create_clone_of_menu" => {
-            let actor = parse_field_clone_option(&block.fields["CLONE_OPTION"]);
-            Control::CreateCloneOfMenu { actor }.into()
-        }
-        "data_setvariableto" => {
-            let value = parse_value(blocks, &block.inputs["VALUE"]);
-            let var = parse_field_variable(&block.fields["VARIABLE"]);
-            Data::SetVariableTo { value, var }.into()
-        }
+        "motion_movesteps" => normal_block!(Motion::MoveSteps; steps => "STEPS"),
+        "looks_sayforsecs" => normal_block!(Looks::SayForSecs; message => "MESSAGE", secs => "SECS"),
+        "control_wait" => normal_block!(Control::Wait; duration => "DURATION"),
+        "control_repeat" => normal_block! { Control::Repeat;
+            times => "TIMES";
+            branch => parse_sequence_from_id_or_empty(inputs "SUBSTACK")
+        },
+        "control_if" => normal_block! { Control::IfCondition;
+            condition => "CONDITION";
+            branch => parse_sequence_from_id_or_empty(inputs "SUBSTACK")
+        },
+        "control_create_clone_of" => normal_block!(Control::CreateCloneOf; actor => "CLONE_OPTION"),
+        "control_create_clone_of_menu" => normal_block!(Control::CreateCloneOfMenu;; actor => parse_field_clone_option(fields "CLONE_OPTION")),
+        "data_setvariableto" => normal_block!(Data::SetVariableTo; value => "VALUE"; var => parse_field_variable(fields "VARIABLE")),
         "operator_add" => binop!(Add, "NUM"),
         "operator_subtract" => binop!(Sub, "NUM"),
         "operator_multiply" => binop!(Mul, "NUM"),
@@ -255,10 +290,7 @@ fn parse_block(blocks: &HashMap<String, scratch::Block>, block: &scratch::Block)
         "operator_equals" => binop!(Equals, "OPERAND"),
         "operator_and" => binop!(And, "OPERAND"),
         "operator_or" => binop!(Or, "OPERAND"),
-        "operator_not" => {
-            let operand = parse_value(blocks, &block.inputs["OPERAND"]);
-            Operator::Not { operand }.into()
-        }
+        "operator_not" => normal_block!(Operator::Not; operand => "OPERAND"),
         opcode => todo!("unimplemented block: {opcode}"),
     }
 }
