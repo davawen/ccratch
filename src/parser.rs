@@ -34,15 +34,31 @@ pub enum Value {
 }
 
 #[derive(Debug)]
-pub enum Block {
+pub enum Motion {
+    MoveSteps { steps: Value },
+}
+
+#[derive(Debug)]
+pub enum Looks {
+    SayForSecs { message: Value, secs: Value },
+}
+
+#[derive(Debug)]
+pub enum Event {
     WhenFlagClicked,
-    MoveSteps{ steps: Value },
-    CreateCloneOf { actor: Value },
-    CreateCloneOfMenu { actor: String },
-    SetVariableTo { value: Value, var: Variable },
+}
+
+#[derive(Debug)]
+pub enum Control {
     Wait { duration: Value },
     Repeat { times: Value, branch: Sequence },
     IfCondition { condition: Value, branch: Sequence },
+    CreateCloneOf { actor: Value },
+    CreateCloneOfMenu { actor: String },
+}
+
+#[derive(Debug)]
+pub enum Operator {
     Add { lhs: Value, rhs: Value },
     Sub { lhs: Value, rhs: Value },
     Mul { lhs: Value, rhs: Value },
@@ -53,8 +69,29 @@ pub enum Block {
     And { lhs: Value, rhs: Value },
     Or { lhs: Value, rhs: Value },
     Not { operand: Value },
-    SayForSecs { message: Value, secs: Value },
 }
+
+#[derive(Debug)]
+pub enum Data {
+    SetVariableTo { value: Value, var: Variable },
+}
+
+#[derive(Debug)]
+pub enum Block {
+    Motion(Motion),
+    Looks(Looks),
+    Event(Event),
+    Control(Control),
+    Operator(Operator),
+    Data(Data)
+}
+
+impl From<Motion> for Block { fn from(value: Motion) -> Self { Block::Motion(value) } }
+impl From<Looks> for Block { fn from(value: Looks) -> Self { Block::Looks(value) } }
+impl From<Event> for Block { fn from(value: Event) -> Self { Block::Event(value) } }
+impl From<Control> for Block { fn from(value: Control) -> Self { Block::Control(value) } }
+impl From<Operator> for Block { fn from(value: Operator) -> Self { Block::Operator(value) } }
+impl From<Data> for Block { fn from(value: Data) -> Self { Block::Data(value) } }
 
 #[derive(Debug)]
 pub struct Sequence(pub Vec<Block>);
@@ -166,48 +203,48 @@ fn parse_block(blocks: &HashMap<String, scratch::Block>, block: &scratch::Block)
             {
                 let lhs = parse_value(blocks, &block.inputs[concat!($inputname, "1")]);
                 let rhs = parse_value(blocks, &block.inputs[concat!($inputname, "2")]);
-                Block::$outblock { lhs, rhs }
+                Operator::$outblock { lhs, rhs }.into()
             }
         };
     }
 
     match block.opcode.as_str() {
-        "event_whenflagclicked" => Block::WhenFlagClicked,
+        "event_whenflagclicked" => Event::WhenFlagClicked.into(),
         "motion_movesteps" => {
             let steps = parse_value(blocks, &block.inputs["STEPS"]);
-            Block::MoveSteps { steps }
+            Motion::MoveSteps { steps }.into()
         }
         "looks_sayforsecs" => {
             let message = parse_value(blocks, &block.inputs["MESSAGE"]);
             let secs = parse_value(blocks, &block.inputs["SECS"]);
-            Block::SayForSecs { message, secs }
+            Looks::SayForSecs { message, secs }.into()
         }
         "control_wait" => {
             let duration = parse_value(blocks, &block.inputs["DURATION"]);
-            Block::Wait { duration }
+            Control::Wait { duration }.into()
         }
         "control_repeat" => {
             let times = parse_value(blocks, &block.inputs["TIMES"]);
             let branch = parse_sequence_from_id_or_empty(blocks, &block.inputs["SUBSTACK"]);
-            Block::Repeat { times, branch }
+            Control::Repeat { times, branch }.into()
         }
         "control_if" => {
             let condition = parse_value(blocks, &block.inputs["CONDITION"]);
             let branch = parse_sequence_from_id_or_empty(blocks, &block.inputs["SUBSTACK"]);
-            Block::IfCondition { condition, branch }
+            Control::IfCondition { condition, branch }.into()
         }
         "control_create_clone_of" => {
             let actor = parse_value(blocks, &block.inputs["CLONE_OPTION"]);
-            Block::CreateCloneOf { actor }
+            Control::CreateCloneOf { actor }.into()
         }
         "control_create_clone_of_menu" => {
             let actor = parse_field_clone_option(&block.fields["CLONE_OPTION"]);
-            Block::CreateCloneOfMenu { actor }
+            Control::CreateCloneOfMenu { actor }.into()
         }
         "data_setvariableto" => {
             let value = parse_value(blocks, &block.inputs["VALUE"]);
             let var = parse_field_variable(&block.fields["VARIABLE"]);
-            Block::SetVariableTo { value, var }
+            Data::SetVariableTo { value, var }.into()
         }
         "operator_add" => binop!(Add, "NUM"),
         "operator_subtract" => binop!(Sub, "NUM"),
@@ -220,7 +257,7 @@ fn parse_block(blocks: &HashMap<String, scratch::Block>, block: &scratch::Block)
         "operator_or" => binop!(Or, "OPERAND"),
         "operator_not" => {
             let operand = parse_value(blocks, &block.inputs["OPERAND"]);
-            Block::Not { operand }
+            Operator::Not { operand }.into()
         }
         opcode => todo!("unimplemented block: {opcode}"),
     }

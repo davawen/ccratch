@@ -59,6 +59,13 @@ pub fn generate_var_name() -> String {
     nanoid!(12, &CIDENT)
 }
 
+pub struct GeneratorArgs<'a> {
+    pub target: &'a parser::Target,
+    pub globals: &'a VarMap,
+    pub state: &'a mut u32,
+    pub new_locals: &'a mut Vec<String>,
+}
+
 /// get a variable in a function
 pub fn get_var<'a>(args: &GeneratorArgs, id: &'_ str) -> String {
     if let Some(var) = args.target.vars.get(id) {
@@ -73,9 +80,29 @@ pub fn get_var<'a>(args: &GeneratorArgs, id: &'_ str) -> String {
     }
 }
 
-pub struct GeneratorArgs<'a> {
-    pub target: &'a parser::Target,
-    pub globals: &'a VarMap,
-    pub state: &'a mut u32,
-    pub new_locals: &'a mut Vec<String>,
+pub fn start_case<W: Write>(f: &mut IW<W>, state: &mut u32) -> io::Result<()> {
+    writeln!(f, "case {}: {{", *state)?;
+    f.indent();
+    Ok(())
+}
+
+pub fn end_case<W: Write>(f: &mut IW<W>, state: &mut u32) -> io::Result<()> {
+    f.deindent();
+    writeln!(f, "}}")?;
+    writeln!(f, "break;")?;
+    *state += 1;
+    Ok(())
+}
+
+pub enum Return {
+    /// The block returns nothing and ends normally
+    Empty,
+    /// The block returns a value (an identifier to a C variable)
+    Value(String),
+    /// The block handles switching the state by itself. 
+    /// `"s->state = {*state + 1}"` will not be added automatically.
+    Hold,
+    /// The block handles ending the case by itself by calling [`end_case`].
+    /// `"} break;"` will not be added automatically.
+    Ended
 }

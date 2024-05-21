@@ -5,13 +5,23 @@ use crate::parser::{self, Block, Value, VarMap};
 mod util;
 use util::*;
 
+mod motion;
+mod looks;
+mod event;
+mod control;
+mod operator;
+mod data;
+
 /// returns the variable name of the returned value
 fn compute_value<W: Write>(f: &mut IW<W>, args: &mut GeneratorArgs, value: &Value) -> io::Result<String> {
     let v = generate_var_name();
     match value {
         Value::Block(b) => {
             let v = linearize_block(f, args, &b)?;
-            return Ok(v.expect("expected block to write to a variable"));
+            match v {
+                Return::Value(v) => return Ok(v),
+                _ => unreachable!("expected a block that returns a value:\n{b:#?}")
+            }
         }
         Value::Number(n) => {
             writeln!(f, "Value {v} = (Value){{ .type = VALUE_NUM, .n = {n} }};")?;
@@ -39,183 +49,38 @@ fn compute_value<W: Write>(f: &mut IW<W>, args: &mut GeneratorArgs, value: &Valu
     Ok(v)
 }
 
-/// `op_func` is the function that will get applied to both operands.
-///
-/// Returns a variable's identifier.
-fn binop_block<W: Write>(
-    f: &mut IW<W>,
-    args: &mut GeneratorArgs,
-    lhs: &Value,
-    rhs: &Value,
-    op_func: &str,
-) -> io::Result<String> {
-    let lhs = compute_value(f, args, lhs)?;
-    let rhs = compute_value(f, args, rhs)?;
-
-    writeln!(f, "{lhs} = {op_func}({lhs}, {rhs});")?;
-    Ok(lhs)
+trait Linearize {
+    fn linearize<W: Write>(&self, f: &mut IW<W>, args: &mut GeneratorArgs) -> io::Result<Return>;
 }
 
 /// returns the variable name of the returned value (if the block is an expression)
-fn linearize_block<W: Write>(f: &mut IW<W>, args: &mut GeneratorArgs, block: &Block) -> io::Result<Option<String>> {
-    match block {
-        Block::WhenFlagClicked => {
-            writeln!(f, "if (g->flag_clicked) s->state = {};", *args.state + 1)?;
-            return Ok(None);
-        }
-        Block::MoveSteps { steps } => {
-            let steps = compute_value(f, args, steps)?;
-            writeln!(f, "convert_to_number(&{steps});")?;
-            writeln!(f, "float direction = scratch_degrees_to_radians(a->actor_state.direction);")?;
-            writeln!(f, "a->actor_state.x += cosf(direction)*{steps}.n;")?;
-            writeln!(f, "a->actor_state.y += sinf(direction)*{steps}.n;")?;
-        }
-        Block::CreateCloneOf { actor } => {
-            // TODO:
-            let _actor = compute_value(f, args, actor);
-            writeln!(f, "printf(\"TODO: create clone code\");")?;
-            writeln!(f, "exit(-1);")?;
-        }
-        Block::SetVariableTo { value, var } => {
-            let value = compute_value(f, args, value)?;
-            writeln!(f, "{} = {};", get_var(args, &var.id), value)?;
-        }
-        Block::Wait { duration } => {
-            let duration = compute_value(f, args, duration)?;
-            writeln!(f, "convert_to_number(&{duration});")?;
-            writeln!(f, "s->time = GetTime() + {duration}.n;")?;
-            writeln!(f, "s->state = {};", *args.state + 1)?;
+fn linearize_block<W: Write>(f: &mut IW<W>, args: &mut GeneratorArgs, block: &Block) -> io::Result<Return> {
+    let ret = match block {
+        Block::Motion(v) => v.linearize(f, args),
+        Block::Looks(v) => v.linearize(f, args),
+        Block::Event(v) => v.linearize(f, args),
+        Block::Control(v) => v.linearize(f, args),
+        Block::Operator(v) => v.linearize(f, args),
+        Block::Data(v) => v.linearize(f, args),
+    }?;
 
-            end_case(f, args.state)?;
-            start_case(f, args.state)?;
-
-            writeln!(f, "if (GetTime() >= s->time) s->state = {};", *args.state + 1)?;
-            return Ok(None);
-        }
-        Block::Repeat { times, branch } => {
-            *args.state += 1; // make the branch think we ended this case
-            let repeat_start = *args.state;
-            let mut branch_code = IW::new(Vec::new());
-            // prepare branch to get end state number
-            linearize_sequence(&mut branch_code, args, branch)?;
-
-            // initialize loop value (evaluate condition once)
-            let num = compute_value(f, args, times)?;
-            writeln!(f, "convert_to_number(&{num})")?;
-
-            // if initial condition is false, skip loop body
-            writeln!(f, "if ((int){num}.n <= 0) s->state = {};", *args.state + 1)?;
-
-            // otherwise, initialize loop variable and go to the next state (start of the sequence we linearized above)
-            writeln!(f, "else {{")?;
-            f.indent();
-            writeln!(f, "s->state = {};", repeat_start)?;
-            let loop_var = format!("loop_{}", generate_var_name());
-            writeln!(f, "s->{loop_var} = {num}.n;")?;
-            f.deindent();
-            writeln!(f, "}}")?;
-
-            *args.state -= 1; // reverse previous add
-                              // end loop start
-            end_case(f, args.state)?;
-
-            f.write_all(&branch_code.writer)?;
-
-            // end loop (loop back condition)
-            start_case(f, args.state)?;
-            writeln!(f, "s->{loop_var}--;")?;
-            writeln!(f, "if (s->{loop_var} > 0) s->state = {};", repeat_start)?;
-            writeln!(f, "else s->state = {};", *args.state + 1)?;
-            args.new_locals.push(loop_var);
-            return Ok(None);
-        }
-        Block::IfCondition { condition, branch } => {
-            *args.state += 1; // make the branch think we ended this case
-            let branch_start = *args.state;
-            let mut branch_code = IW::new(Vec::new());
-            // prepare branch to get end state number
-            linearize_sequence(&mut branch_code, args, branch)?;
-
-            let condition = compute_value(f, args, condition)?;
-            writeln!(f, "convert_to_bool(&{condition});")?;
-            writeln!(f, "if ({condition}.b) s->state = {branch_start};")?;
-            writeln!(f, "else s->state = {};", *args.state + 1)?;
-
-            *args.state -= 1; // reverse previous add
-                              // end condition start
-            end_case(f, args.state)?;
-            f.write_all(&branch_code.writer)?;
-
-            start_case(f, args.state)?; // start a new case to counteract the automatically added end case
-        }
-        Block::SayForSecs { message, secs } => {
-            // printing part
-            let message = compute_value(f, args, &message)?;
-            writeln!(f, "Value output = copy_value({message});")?;
-            writeln!(f, "convert_to_rcstr(&output);")?;
-
-            let duration = compute_value(f, args, secs)?;
-            writeln!(f, "convert_to_number(&{duration});")?;
-            writeln!(f, "s->time = GetTime() + {duration}.n;")?;
-            writeln!(f, "s->state = {};", *args.state + 1)?;
-
-            writeln!(f, "a->actor_state.saying = output.s;")?;
-            writeln!(f, "a->actor_state.say_end = s->time;")?;
-
-            // waiting part
-            end_case(f, args.state)?;
-            start_case(f, args.state)?;
-
-            writeln!(f, "if (GetTime() >= s->time) s->state = {};", *args.state + 1)?;
-            return Ok(None);
-        }
-        Block::CreateCloneOfMenu { actor } => {
-            let v = generate_var_name();
-            writeln!(
-                f,
-                "Value {v} = (Value){{ .type = VALUE_STRING, .s = \"{actor}\" }};"
-            )?;
-            return Ok(Some(v));
-        }
-        Block::Add { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_add")?)),
-        Block::Sub { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_sub")?)),
-        Block::Mul { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_mul")?)),
-        Block::Div { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_div")?)),
-        Block::GreaterThan { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_greater_than")?)),
-        Block::LesserThan { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_lesser_than")?)),
-        Block::Equals { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_equal")?)),
-        Block::And { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_and")?)),
-        Block::Or { lhs, rhs } => return Ok(Some(binop_block(f, args, lhs, rhs, "value_or")?)),
-        Block::Not { operand } => {
-            let operand = compute_value(f, args, operand)?;
-            writeln!(f, "value_not(&{operand});")?;
-            return Ok(Some(operand));
-        }
+    match ret {
+        Return::Empty => writeln!(f, "s->state = {};", *args.state + 1)?,
+        Return::Value(_) => unreachable!("block returning a value used as a statement:\n{block:#?}"),
+        _ => ()
     }
-    writeln!(f, "s->state = {};", *args.state + 1)?;
-
-    Ok(None)
-}
-
-fn start_case<W: Write>(f: &mut IW<W>, state: &mut u32) -> io::Result<()> {
-    writeln!(f, "case {}: {{", *state)?;
-    f.indent();
-    Ok(())
-}
-
-fn end_case<W: Write>(f: &mut IW<W>, state: &mut u32) -> io::Result<()> {
-    f.deindent();
-    writeln!(f, "}}")?;
-    writeln!(f, "break;")?;
-    *state += 1;
-    Ok(())
+    Ok(ret)
 }
 
 fn linearize_sequence<W: Write>(f: &mut IW<W>, args: &mut GeneratorArgs, sequence: &parser::Sequence) -> io::Result<()> {
     for block in &sequence.0 {
         start_case(f, args.state)?;
-        linearize_block(f, args, block)?;
-        end_case(f, args.state)?;
+        let ret = linearize_block(f, args, block)?;
+        match ret {
+            Return::Empty | Return::Hold => end_case(f, args.state)?,
+            Return::Value(_) => unreachable!(),
+            Return::Ended => ()
+        }
     }
 
     Ok(())
